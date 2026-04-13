@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="es">
+<head th:replace="~{fragments/layout :: head(${editId != null} ? 'Editar operación' : 'Nueva operación')}"></head>
+<body>
+<nav th:replace="~{fragments/layout :: navbar}"></nav>
+
+<div class="container">
+    <div class="row justify-content-center">
+        <div class="col-lg-7">
+            
+
+            <div th:if="${error}" class="alert alert-danger alert-dismissible fade show">
+                <span th:text="${error}"></span>
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            </div>
+
+            <div class="card shadow-sm">
+                <div class="card-body">
+                    <form th:action="${editId != null} ? @{/operations/{id}/edit(id=${editId})} : @{/operations}"
+                          th:object="${form}" method="post" novalidate>
+                        <h5 class="card-title mb-3"
+                            th:text="${editId != null} ? 'Editar operación' : 'Nueva operación'"></h5>
+
+                        <div class="row g-3 mb-3">
+                            <div class="col-sm-6">
+                                <label class="form-label fw-semibold">Fecha *</label>
+                                <input type="date" class="form-control"
+                                       th:field="*{date}"
+                                       th:classappend="${#fields.hasErrors('date')} ? 'is-invalid'"/>
+                                <div class="invalid-feedback" th:errors="*{date}"></div>
+                            </div>
+                            <div class="col-sm-6">
+                                <label class="form-label fw-semibold">Tipo *</label>
+                                <select class="form-select" th:field="*{type}">
+                                    <option th:each="t : ${operationTypes}"
+                                            th:value="${t.name()}"
+                                            th:text="${t.label}"></option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="row g-3 mb-3">
+                            <div class="col-sm-6">
+                                <label class="form-label fw-semibold">Ticker *</label>
+                                <input type="text" class="form-control text-uppercase"
+                                       th:field="*{ticker}"
+                                       list="tickerList"
+                                       th:classappend="${#fields.hasErrors('ticker')} ? 'is-invalid'"/>
+                                <datalist id="tickerList"></datalist>
+                                <div class="invalid-feedback" th:errors="*{ticker}"></div>
+                            </div>
+                            <div class="col-sm-6">
+                                <label class="form-label fw-semibold">ISIN del valor *</label>
+                                <input type="text" class="form-control"
+                                       th:field="*{assetName}"
+                                       th:classappend="${#fields.hasErrors('assetName')} ? 'is-invalid'"/>
+                                <div class="invalid-feedback" th:errors="*{assetName}"></div>
+                            </div>
+                        </div>
+
+                        <div class="row g-3 mb-3">
+                            <div class="col-sm-6">
+                                <label class="form-label fw-semibold">Broker *</label>
+                                <input type="text" class="form-control"
+                                       th:field="*{broker}"
+                                       list="brokerList"
+                                       th:classappend="${#fields.hasErrors('broker')} ? 'is-invalid'"/>
+                                <datalist id="brokerList">
+                                    <option value="Trade Republic"/>
+                                    <option value="ING"/>
+                                    <option value="MyInvestor"/>
+                                </datalist>
+                                <div class="invalid-feedback" th:errors="*{broker}"></div>
+                            </div>
+                            <div class="col-sm-6">
+                                <label class="form-label fw-semibold">Grupo AEAT *</label>
+                                <select class="form-select" th:field="*{aeatGroup}">
+                                    <option th:each="g : ${aeatGroups}"
+                                            th:value="${g.name()}"
+                                            th:text="${g.label}"></option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="row g-3 mb-3">
+                            <div class="col-sm-4">
+                                <label class="form-label fw-semibold">Cantidad *</label>
+                                <input type="number" class="form-control"
+                                       th:field="*{quantity}"
+                                       step="0.00000001" min="0.00000001"
+                                       th:classappend="${#fields.hasErrors('quantity')} ? 'is-invalid'"/>
+                                <div class="invalid-feedback" th:errors="*{quantity}"></div>
+                            </div>
+                            <div class="col-sm-4" id="totalField">
+                                <label class="form-label fw-semibold">Coste total (€) *</label>
+                                <input type="number" class="form-control"
+                                       th:field="*{total}"
+                                       step="0.01" min="0.000001"
+                                       th:classappend="${#fields.hasErrors('total')} ? 'is-invalid'"/>
+                                <div class="invalid-feedback" th:errors="*{total}"></div>
+                            </div>
+                            <div class="col-sm-4" id="commissionField">
+                                <label class="form-label fw-semibold">Comisión (€)</label>
+                                <input type="number" class="form-control"
+                                       th:field="*{commission}"
+                                       step="0.01" min="0"
+                                       placeholder="0.00"/>
+                            </div>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label fw-semibold">Notas (opcional)</label>
+                            <input type="text" class="form-control" th:field="*{notes}"
+                                   placeholder="DCA mensual, split, etc."/>
+                        </div>
+
+                        <div class="d-flex gap-2 justify-content-end">
+                            <a href="/operations" class="btn btn-outline-secondary">Cancelar</a>
+                            <button type="submit" class="btn btn-success">
+                                <i class="bi bi-check-lg me-1"></i>Guardar
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Info box -->
+            <div class="alert alert-info mt-3">
+                <strong>Cómo se calcula el precio unitario:</strong><br>
+                <span class="text-success">Compra</span>: (coste total − comisión) ÷ cantidad<br>
+                <span class="text-danger">Venta</span>: (coste total + comisión) ÷ cantidad<br>
+                <span class="text-info">Canje</span>: acciones liberadas (scrip dividend) — coste = 0 €<br>
+                El FIFO se aplica <strong>globalmente por ticker</strong>, independientemente del broker.
+            </div>
+
+        </div>
+    </div>
+</div>
+
+<div th:replace="~{fragments/layout :: scripts}"></div>
+<script>
+    // Mostrar/ocultar campos coste y comisión según tipo de operación
+    const typeSelect    = document.getElementById('type');
+    const totalField    = document.getElementById('totalField');
+    const commissionField = document.getElementById('commissionField');
+
+    function toggleCostFields() {
+        const isCanje = typeSelect.value === 'CANJE';
+        totalField.style.display      = isCanje ? 'none' : '';
+        commissionField.style.display = isCanje ? 'none' : '';
+    }
+    typeSelect?.addEventListener('change', toggleCostFields);
+    toggleCostFields(); // aplicar al cargar (por si se recarga con tipo=CANJE)
+
+    // Mayúsculas automáticas en ticker
+    const tickerInput = document.getElementById('ticker');
+    const assetNameInput = document.getElementById('assetName');
+
+    tickerInput?.addEventListener('input', function () {
+        this.value = this.value.toUpperCase();
+    });
+
+    // Carga tickers conocidos: rellena el datalist y guarda el mapa ticker → {assetName, aeatGroup}
+    let tickerMap = {};
+    fetch('/operations/ticker-names')
+        .then(r => r.json())
+        .then(data => {
+            tickerMap = data;
+            const datalist = document.getElementById('tickerList');
+            Object.entries(data).forEach(([ticker, info]) => {
+                const opt = document.createElement('option');
+                opt.value = ticker;
+                opt.label = info.assetName;
+                datalist.appendChild(opt);
+            });
+        });
+
+    // Al salir del ticker, autocompletar nombre y mercado si están vacíos
+    tickerInput?.addEventListener('blur', function () {
+        const info = tickerMap[this.value.toUpperCase()];
+        if (!info) return;
+        if (!assetNameInput.value) {
+            assetNameInput.value = info.assetName;
+        }
+        const aeatGroupSelect = document.getElementById('aeatGroup');
+        if (aeatGroupSelect) {
+            aeatGroupSelect.value = info.aeatGroup;
+        }
+    });
+</script>
+</body>
+</html>

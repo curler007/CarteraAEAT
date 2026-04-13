@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="es">
+<head th:replace="~{fragments/layout :: head('Operaciones')}"></head>
+<body>
+<nav th:replace="~{fragments/layout :: navbar}"></nav>
+
+<div class="container">
+
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h4 class="mb-0"><i class="bi bi-list-ul me-2"></i>Historial de operaciones</h4>
+    </div>
+
+    <div th:if="${success}" class="alert alert-success alert-dismissible fade show">
+        <span th:text="${success}"></span>
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+    <div th:if="${error}" class="alert alert-danger alert-dismissible fade show">
+        <span th:text="${error}"></span>
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+
+    <!-- Filtros -->
+    <div class="d-flex gap-2 align-items-center mb-3 flex-wrap">
+        <div class="input-group" style="max-width: 220px;">
+            <span class="input-group-text"><i class="bi bi-search"></i></span>
+            <input type="text" id="tickerFilter" class="form-control text-uppercase"
+                   placeholder="Ticker..." autocomplete="off"/>
+        </div>
+        <div class="input-group" style="max-width: 220px;">
+            <span class="input-group-text"><i class="bi bi-bank"></i></span>
+            <input type="text" id="brokerFilter" class="form-control"
+                   placeholder="Broker..." list="brokerFilterList" autocomplete="off"/>
+            <datalist id="brokerFilterList">
+                <option value="Trade Republic"/>
+                <option value="ING"/>
+                <option value="MyInvestor"/>
+            </datalist>
+        </div>
+        <button class="btn btn-outline-secondary btn-sm" id="clearFilter" style="display:none;">
+            <i class="bi bi-x-lg"></i> Limpiar
+        </button>
+        <span class="text-muted small" id="filterCount"></span>
+    </div>
+
+    <div class="card shadow-sm">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0" id="opsTable">
+                <thead class="table-dark">
+                <tr>
+                    <th>Fecha</th>
+                    <th>Tipo</th>
+                    <th>Ticker</th>
+                    <th>Nombre</th>
+                    <th>Broker</th>
+                    <th>Grupo AEAT</th>
+                    <th class="text-end">Cantidad</th>
+                    <th class="text-end">Precio (€)</th>
+                    <th class="text-end">Comisión (€)</th>
+                    <th class="text-end">Total (€)</th>
+                    <th class="text-end">Saldo</th>
+                    <th></th>
+                </tr>
+                </thead>
+                <tbody>
+                <tr th:each="op : ${operations}"
+    th:classappend="${op.pending} ? 'table-danger' : (${op.type.name() == 'SELL'} ? 'table-secondary' : (${lotRowClass[op.id]} ?: ''))">
+                    <td th:text="${#temporals.format(op.date, 'dd/MM/yyyy')}"></td>
+                    <td>
+                        <span th:if="${op.type.name() == 'BUY'}"
+                              class="badge badge-buy">Compra</span>
+                        <span th:if="${op.type.name() == 'SELL'}"
+                              class="badge badge-sell">Venta</span>
+                        <span th:if="${op.type.name() == 'CANJE'}"
+                              class="badge bg-info text-dark">Canje</span>
+                        <span th:if="${op.pending}"
+                              class="badge bg-warning text-dark ms-1"
+                              th:text="'⏳ ' + ${@fmt.qty(op.pendingQty)}">
+                        </span>
+                    </td>
+                    <td><strong th:text="${op.ticker}"></strong></td>
+                    <td th:text="${op.assetName}"></td>
+                    <td th:text="${op.broker}"></td>
+                    <td th:text="${op.aeatGroup.label}"></td>
+                    <td class="text-end" th:text="${@fmt.qty(op.quantity)}"></td>
+                    <td class="text-end" th:text="${#numbers.formatDecimal(op.price, 1, 4)}"></td>
+                    <td class="text-end" th:text="${#numbers.formatDecimal(op.commission, 1, 2)}"></td>
+                    <td class="text-end"><strong th:text="${#numbers.formatDecimal(op.total, 1, 2)}"></strong></td>
+                    <td class="text-end text-muted"
+                        th:if="${op.type.name() != 'SELL'}"
+                        th:text="${@fmt.qty(runningBalance[op.id])}"></td>
+                    <td class="text-end text-muted"
+                        th:if="${op.type.name() == 'SELL'}"
+                        th:text="${@fmt.qty(runningBalance[op.id])}"
+                        th:attr="data-bs-toggle=${sellTooltip[op.id] != null ? 'tooltip' : ''},
+                                 data-bs-html='true',
+                                 data-bs-title=${sellTooltip[op.id]}">
+                    </td>
+                    <td class="text-end">
+                        <div class="d-flex gap-1 justify-content-end">
+                            <a th:href="@{/operations/{id}/edit(id=${op.id})}"
+                               class="btn btn-outline-secondary btn-sm">
+                                <i class="bi bi-pencil"></i>
+                            </a>
+                            <form th:action="@{/operations/{id}/delete(id=${op.id})}"
+                                  method="post"
+                                  onsubmit="return confirm('¿Eliminar esta operación?');">
+                                <button type="submit" class="btn btn-outline-danger btn-sm">
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                            </form>
+                        </div>
+                    </td>
+                </tr>
+                <tr th:if="${#lists.isEmpty(operations)}">
+                    <td colspan="12" class="text-center text-muted py-3">Sin operaciones. <a href="/operations/new">Registra la primera</a>.</td>
+                </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<div th:replace="~{fragments/layout :: scripts}"></div>
+<script>
+    document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => {
+        new bootstrap.Tooltip(el);
+    });
+
+    const tickerFilter = document.getElementById('tickerFilter');
+    const brokerFilter = document.getElementById('brokerFilter');
+    const clearBtn     = document.getElementById('clearFilter');
+    const countLabel   = document.getElementById('filterCount');
+
+    // Cachear ticker y broker en data-attributes al cargar
+    document.querySelectorAll('#opsTable tbody tr').forEach(row => {
+        if (row.cells[2]) row.dataset.ticker = row.cells[2].textContent.trim().toUpperCase();
+        if (row.cells[4]) row.dataset.broker = row.cells[4].textContent.trim().toUpperCase();
+    });
+
+    function applyFilter() {
+        const ticker = tickerFilter.value.trim().toUpperCase();
+        const broker = brokerFilter.value.trim().toUpperCase();
+        let visible = 0;
+
+        document.querySelectorAll('#opsTable tbody tr').forEach(row => {
+            if (!row.dataset.ticker) return;
+            const matchTicker = !ticker || row.dataset.ticker.includes(ticker);
+            const matchBroker = !broker || row.dataset.broker.includes(broker);
+            const show = matchTicker && matchBroker;
+            row.style.display = show ? '' : 'none';
+            if (show) visible++;
+        });
+
+        const hasFilter = ticker || broker;
+        clearBtn.style.display = hasFilter ? '' : 'none';
+        countLabel.textContent = hasFilter ? visible + ' operación' + (visible !== 1 ? 'es' : '') : '';
+    }
+
+    tickerFilter.addEventListener('input', applyFilter);
+    brokerFilter.addEventListener('input', applyFilter);
+    clearBtn.addEventListener('click', () => {
+        tickerFilter.value = '';
+        brokerFilter.value = '';
+        applyFilter();
+        tickerFilter.focus();
+    });
+</script>
+</body>
+</html>

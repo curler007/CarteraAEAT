@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="es">
+<head th:replace="~{fragments/layout :: head('Ventas AEAT')}"></head>
+<body>
+<nav th:replace="~{fragments/layout :: navbar}"></nav>
+
+<div class="container">
+
+    <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+        <h4 class="mb-0"><i class="bi bi-receipt me-2"></i>Ventas — Ejercicio fiscal</h4>
+        <div class="d-flex gap-2 align-items-center">
+            <!-- Selector de año -->
+            <form method="get" action="/sales" class="d-flex gap-2">
+                <select name="year" class="form-select form-select-sm" onchange="this.form.submit()">
+                    <option th:each="y : ${years}"
+                            th:value="${y}"
+                            th:text="${y}"
+                            th:selected="${y == selectedYear}"></option>
+                </select>
+            </form>
+            <!-- Exportar CSV -->
+            <a th:href="@{/sales/export.csv(year=${selectedYear})}"
+               class="btn btn-outline-primary btn-sm">
+                <i class="bi bi-download me-1"></i>Exportar CSV (AEAT)
+            </a>
+        </div>
+    </div>
+
+    <!-- Resumen totales -->
+    <div class="row g-3 mb-4" th:unless="${#lists.isEmpty(records)}">
+        <div class="col-sm-3">
+            <div class="card text-center shadow-sm">
+                <div class="card-body">
+                    <div class="text-muted small">Valor adquisición total</div>
+                    <div class="fs-5 fw-bold"
+                         th:text="${#numbers.formatDecimal(totalCost, 1, 2) + ' €'}"></div>
+                </div>
+            </div>
+        </div>
+        <div class="col-sm-3">
+            <div class="card text-center shadow-sm">
+                <div class="card-body">
+                    <div class="text-muted small">Valor transmisión total</div>
+                    <div class="fs-5 fw-bold"
+                         th:text="${#numbers.formatDecimal(totalProceeds, 1, 2) + ' €'}"></div>
+                </div>
+            </div>
+        </div>
+        <div class="col-sm-3">
+            <div class="card text-center shadow-sm">
+                <div class="card-body">
+                    <div class="text-muted small">Ganancias patrimoniales</div>
+                    <div class="fs-5 fw-bold gain-pos"
+                         th:text="${#numbers.formatDecimal(totalGains, 1, 2) + ' €'}"></div>
+                </div>
+            </div>
+        </div>
+        <div class="col-sm-3">
+            <div class="card text-center shadow-sm">
+                <div class="card-body">
+                    <div class="text-muted small">Pérdidas patrimoniales</div>
+                    <div class="fs-5 fw-bold gain-neg"
+                         th:text="${#numbers.formatDecimal(totalLosses, 1, 2) + ' €'}"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div th:if="${#lists.isEmpty(records)}" class="alert alert-info">
+        No hay ventas registradas para el ejercicio <strong th:text="${selectedYear}"></strong>.
+    </div>
+
+<div class="card shadow-sm" th:unless="${#lists.isEmpty(records)}">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0" id="salesTable">
+                <thead class="table-dark">
+                <tr>
+                    <th>Valor</th>
+                    <th>Grupo AEAT</th>
+                    <th class="text-end">Cantidad</th>
+                    <th class="text-end">Val. adquisición (€)</th>
+                    <th class="text-end">Val. transmisión (€)</th>
+                    <th class="text-end gain-pos">Ganancia (€)</th>
+                    <th class="text-end gain-neg">Pérdida (€)</th>
+                </tr>
+                </thead>
+                <tbody>
+                <th:block th:each="g : ${groups}">
+                    <!-- Fila resumen del ticker -->
+                    <tr class="table-secondary sales-group-header fw-semibold"
+                        th:attr="data-group=${g.ticker()}"
+                        style="cursor:pointer;">
+                        <td>
+                            <i class="bi bi-chevron-right toggle-icon me-1"></i>
+                            <strong th:text="${g.ticker()}"></strong>
+                            <span class="fw-normal text-muted ms-1" th:text="${g.assetName()}"></span>
+                        </td>
+                        <td th:text="${g.aeatGroupLabel()}"></td>
+                        <td class="text-end" th:text="${@fmt.qty(g.totalQuantity())}"></td>
+                        <td class="text-end" th:text="${#numbers.formatDecimal(g.totalCost(), 1, 2)}"></td>
+                        <td class="text-end" th:text="${#numbers.formatDecimal(g.totalProceeds(), 1, 2)}"></td>
+                        <td class="text-end gain-pos"
+                            th:text="${g.totalGains().signum() > 0} ? ${#numbers.formatDecimal(g.totalGains(), 1, 2)} : ''"></td>
+                        <td class="text-end gain-neg"
+                            th:text="${g.totalLosses().signum() > 0} ? ${#numbers.formatDecimal(g.totalLosses(), 1, 2)} : ''"></td>
+                    </tr>
+                    <!-- Fila contenedora de la sub-tabla de lotes (oculta por defecto) -->
+                    <tr class="sales-group-detail"
+                        th:attr="data-group=${g.ticker()}"
+                        style="display:none;">
+                        <td colspan="7" class="p-0 ps-4 border-0">
+                            <table class="table table-sm table-hover align-middle mb-0">
+                                <thead class="table-light">
+                                <tr>
+                                    <th>F. adquisición</th>
+                                    <th>BC</th>
+                                    <th>F. transmisión</th>
+                                    <th>BV</th>
+                                    <th class="text-end">Cantidad</th>
+                                    <th class="text-end">Val. adquisición (€)</th>
+                                    <th class="text-end">Val. transmisión (€)</th>
+                                    <th class="text-end gain-pos">Ganancia (€)</th>
+                                    <th class="text-end gain-neg">Pérdida (€)</th>
+                                </tr>
+                                </thead>
+                                <tbody>
+                                <tr th:each="r : ${g.records()}">
+                                    <td class="text-muted small" th:text="${#temporals.format(r.purchaseDate, 'dd/MM/yyyy')}"></td>
+                                    <td class="text-muted small" th:text="${r.buyBroker}"></td>
+                                    <td class="text-muted small" th:text="${#temporals.format(r.saleDate, 'dd/MM/yyyy')}"></td>
+                                    <td class="text-muted small" th:text="${r.sellBroker}"></td>
+                                    <td class="text-end" th:text="${@fmt.qty(r.quantity)}"></td>
+                                    <td class="text-end" th:text="${#numbers.formatDecimal(r.costBasis, 1, 2)}"></td>
+                                    <td class="text-end" th:text="${#numbers.formatDecimal(r.proceeds, 1, 2)}"></td>
+                                    <td class="text-end gain-pos"
+                                        th:text="${r.gainLoss.signum() > 0} ? ${#numbers.formatDecimal(r.gainLoss, 1, 2)} : ''"></td>
+                                    <td class="text-end gain-neg"
+                                        th:text="${r.gainLoss.signum() < 0} ? ${#numbers.formatDecimal(r.gainLoss.abs(), 1, 2)} : ''"></td>
+                                </tr>
+                                </tbody>
+                            </table>
+                        </td>
+                    </tr>
+                </th:block>
+                </tbody>
+            </table>
+        </div>
+        <div class="card-footer text-muted small">
+            Haz clic en un ticker para ver el detalle de lotes. Cada lote consumido por FIFO genera una fila.
+        </div>
+    </div>
+
+</div>
+
+<div th:replace="~{fragments/layout :: scripts}"></div>
+<script>
+    // ── Toggle detalle por ticker ──────────────────────────────────────────
+    document.querySelectorAll('.sales-group-header').forEach(headerRow => {
+        headerRow.addEventListener('click', () => {
+            const group   = headerRow.dataset.group;
+            const details = document.querySelectorAll(`.sales-group-detail[data-group="${CSS.escape(group)}"]`);
+            const icon    = headerRow.querySelector('.toggle-icon');
+            const opening = details[0]?.style.display === 'none';
+
+            details.forEach(r => r.style.display = opening ? '' : 'none');
+            icon.className = `bi ${opening ? 'bi-chevron-down' : 'bi-chevron-right'} toggle-icon me-1`;
+        });
+    });
+
+</script>
+</body>
+</html>
