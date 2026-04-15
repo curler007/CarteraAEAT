@@ -225,7 +225,7 @@
             if (!resp.ok) { setDash(cellPrice, cellPct, cellLatent); return; }
 
             const q     = await resp.json();
-            const price = q.previousClose;
+            const price = q.price;
             const inEur = q.originalCurrency === 'EUR' || q.convertedToEur;
 
             const priceLabel = price.toFixed(2) + ' €' + (q.convertedToEur ? ' *' : '');

@@ -45,6 +45,7 @@
             <span>Cantidad: <strong id="sumCantidad">—</strong></span>
             <span>Valor coste: <strong id="sumCoste">—</strong> €</span>
             <span>Valor actual: <strong id="sumValor">—</strong> €</span>
+            <span>Diferencia: <strong id="sumDiff">—</strong></span>
         </div>
     </div>
 
@@ -141,8 +142,9 @@
     const countLabel    = document.getElementById('filterCount');
     const filterSummary = document.getElementById('filterSummary');
     const sumCantidad   = document.getElementById('sumCantidad');
-    const sumCoste     = document.getElementById('sumCoste');
+    const sumCoste      = document.getElementById('sumCoste');
     const sumValor      = document.getElementById('sumValor');
+    const sumDiff       = document.getElementById('sumDiff');
 
     // Cachear ticker y broker en data-attributes al cargar
     document.querySelectorAll('#opsTable tbody tr').forEach(row => {
@@ -157,7 +159,7 @@
 
     function updateSummary() {
         const hasFilter = tickerFilter.value.trim() || brokerFilter.value.trim();
-        if (!hasFilter) { filterSummary.classList.add('d-none'); return; }
+        if (!hasFilter) { filterSummary.classList.add('d-none'); sumDiff.style.color = ''; return; }
 
         let totalCantidad = 0, totalCoste = 0, totalValor = 0, valorLoaded = true;
         document.querySelectorAll('#opsTable tbody tr').forEach(row => {
@@ -178,8 +180,14 @@
         });
 
         sumCantidad.textContent = totalCantidad.toFixed(4).replace(/\.?0+$/, '');
-        sumCoste.textContent   = totalCoste.toFixed(2);
+        sumCoste.textContent    = totalCoste.toFixed(2);
         sumValor.textContent    = valorLoaded ? totalValor.toFixed(2) : totalValor.toFixed(2) + ' *';
+
+        const diff = totalValor - totalCoste;
+        const sign = diff >= 0 ? '+' : '';
+        sumDiff.textContent    = sign + diff.toFixed(2) + ' €' + (valorLoaded ? '' : ' *');
+        sumDiff.style.color    = diff >= 0 ? '#198754' : '#dc3545';
+
         filterSummary.classList.remove('d-none');
     }
 
@@ -245,7 +253,7 @@
             rows.forEach(r => {
                 const qty   = parseFloat(r.dataset.qty);
                 const total = parseFloat(r.dataset.total);
-                const valor = qty * q.previousClose;
+                const valor = qty * q.price;
                 const c     = cell(r);
                 c.classList.remove('text-muted');
                 c.textContent = inEur

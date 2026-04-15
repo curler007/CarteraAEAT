@@ -49,7 +49,7 @@ public class LocalDateConverter implements AttributeConverter<LocalDate, String>
         // 3. Epoch ms (legado pre-migración)
         try {
             long ms = Long.parseLong(value.trim());
-            return Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault()).toLocalDate();
+            return Instant.ofEpochMilli(ms).atZone(ZoneId.of("UTC")).toLocalDate();
         } catch (NumberFormatException ignored) { }
 
         throw new IllegalArgumentException("No se puede parsear la fecha: " + value);

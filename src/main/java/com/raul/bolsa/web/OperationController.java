@@ -131,7 +131,9 @@ public class OperationController {
         //   verde  → totalmente consumida (remainingQty == 0)
         //   amarillo → parcialmente consumida (0 < remaining < initial)
         //   vacío  → sin consumir
-        Map<Long, String> lotRowClass = fifoLotRepo.findAll().stream()
+        List<com.raul.bolsa.domain.FifoLot> allLots = fifoLotRepo.findAll();
+
+        Map<Long, String> lotRowClass = allLots.stream()
                 .collect(Collectors.toMap(
                         lot -> lot.getOperation().getId(),
                         lot -> {
@@ -145,7 +147,7 @@ public class OperationController {
                 ));
         model.addAttribute("lotRowClass", lotRowClass);
 
-        Map<Long, BigDecimal> lotRemainingQty = fifoLotRepo.findAll().stream()
+        Map<Long, BigDecimal> lotRemainingQty = allLots.stream()
                 .collect(Collectors.toMap(
                         lot -> lot.getOperation().getId(),
                         lot -> lot.getRemainingQty(),
@@ -182,16 +184,12 @@ public class OperationController {
                         e -> e.getValue().stream()
                                 .sorted(Comparator.comparing(SaleRecord::getPurchaseDate))
                                 .map(sr -> DATE_FMT.format(sr.getPurchaseDate())
-                                        + ": " + formatQty(sr.getQuantity()))
+                                        + ": " + sr.getQuantity().stripTrailingZeros().toPlainString())
                                 .collect(Collectors.joining("<br>"))
                 ));
         model.addAttribute("sellTooltip", sellTooltip);
 
         return "operations/list";
-    }
-
-    private String formatQty(BigDecimal value) {
-        return value.stripTrailingZeros().toPlainString();
     }
 
     @GetMapping("/operations/new")
