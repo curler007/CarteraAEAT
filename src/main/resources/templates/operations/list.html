@@ -4,7 +4,7 @@
 <body>
 <nav th:replace="~{fragments/layout :: navbar}"></nav>
 
-<div class="container">
+<div class="container-fluid px-4">
 
     <div class="d-flex justify-content-between align-items-center mb-3">
         <h4 class="mb-0"><i class="bi bi-list-ul me-2"></i>Historial de operaciones</h4>
@@ -40,6 +40,12 @@
             <i class="bi bi-x-lg"></i> Limpiar
         </button>
         <span class="text-muted small" id="filterCount"></span>
+        <div id="filterSummary" class="ms-auto d-none d-flex gap-3 align-items-center
+                                       bg-dark text-white rounded px-3 py-1 small">
+            <span>Cantidad: <strong id="sumCantidad">—</strong></span>
+            <span>Valor coste: <strong id="sumCoste">—</strong> €</span>
+            <span>Valor actual: <strong id="sumValor">—</strong> €</span>
+        </div>
     </div>
 
     <div class="card shadow-sm">
@@ -57,12 +63,14 @@
                     <th class="text-end">Precio (€)</th>
                     <th class="text-end">Comisión (€)</th>
                     <th class="text-end">Total (€)</th>
+                    <th class="text-end">Valor actual (€)</th>
                     <th class="text-end">Saldo</th>
                     <th></th>
                 </tr>
                 </thead>
                 <tbody>
                 <tr th:each="op : ${operations}"
+                    th:attr="data-isin=${op.assetName},data-qty=${op.quantity},data-total=${op.total},data-remaining=${lotRemainingQty[op.id] ?: op.quantity}"
     th:classappend="${op.pending} ? 'table-danger' : (${op.type.name() == 'SELL'} ? 'table-secondary' : (${lotRowClass[op.id]} ?: ''))">
                     <td th:text="${#temporals.format(op.date, 'dd/MM/yyyy')}"></td>
                     <td>
@@ -85,6 +93,7 @@
                     <td class="text-end" th:text="${#numbers.formatDecimal(op.price, 1, 4)}"></td>
                     <td class="text-end" th:text="${#numbers.formatDecimal(op.commission, 1, 2)}"></td>
                     <td class="text-end"><strong th:text="${#numbers.formatDecimal(op.total, 1, 2)}"></strong></td>
+                    <td class="text-end text-muted small cell-valor">…</td>
                     <td class="text-end text-muted"
                         th:if="${op.type.name() != 'SELL'}"
                         th:text="${@fmt.qty(runningBalance[op.id])}"></td>
@@ -112,7 +121,7 @@
                     </td>
                 </tr>
                 <tr th:if="${#lists.isEmpty(operations)}">
-                    <td colspan="12" class="text-center text-muted py-3">Sin operaciones. <a href="/operations/new">Registra la primera</a>.</td>
+                    <td colspan="13" class="text-center text-muted py-3">Sin operaciones. <a href="/operations/new">Registra la primera</a>.</td>
                 </tr>
                 </tbody>
             </table>
@@ -126,16 +135,53 @@
         new bootstrap.Tooltip(el);
     });
 
-    const tickerFilter = document.getElementById('tickerFilter');
-    const brokerFilter = document.getElementById('brokerFilter');
-    const clearBtn     = document.getElementById('clearFilter');
-    const countLabel   = document.getElementById('filterCount');
+    const tickerFilter  = document.getElementById('tickerFilter');
+    const brokerFilter  = document.getElementById('brokerFilter');
+    const clearBtn      = document.getElementById('clearFilter');
+    const countLabel    = document.getElementById('filterCount');
+    const filterSummary = document.getElementById('filterSummary');
+    const sumCantidad   = document.getElementById('sumCantidad');
+    const sumCoste     = document.getElementById('sumCoste');
+    const sumValor      = document.getElementById('sumValor');
 
     // Cachear ticker y broker en data-attributes al cargar
     document.querySelectorAll('#opsTable tbody tr').forEach(row => {
         if (row.cells[2]) row.dataset.ticker = row.cells[2].textContent.trim().toUpperCase();
         if (row.cells[4]) row.dataset.broker = row.cells[4].textContent.trim().toUpperCase();
     });
+
+    function parseNum(text) {
+        const n = parseFloat(text.replace(/[^0-9.,\-]/g, '').replace(',', '.'));
+        return isNaN(n) ? null : n;
+    }
+
+    function updateSummary() {
+        const hasFilter = tickerFilter.value.trim() || brokerFilter.value.trim();
+        if (!hasFilter) { filterSummary.classList.add('d-none'); return; }
+
+        let totalCantidad = 0, totalCoste = 0, totalValor = 0, valorLoaded = true;
+        document.querySelectorAll('#opsTable tbody tr').forEach(row => {
+            if (row.style.display === 'none' || !row.dataset.ticker) return;
+            // Excluir ventas y compras totalmente consumidas
+            if (row.classList.contains('table-secondary') ||
+                row.classList.contains('table-danger'))   return;
+            const qty       = parseFloat(row.dataset.qty);
+            const remaining = parseFloat(row.dataset.remaining);
+            if (!remaining || remaining <= 0) return;
+            const ratio  = qty > 0 ? remaining / qty : 1;
+            const coste  = parseNum(row.cells[9]?.textContent);
+            const valor  = parseNum(row.querySelector('.cell-valor')?.textContent);
+            totalCantidad += remaining;
+            if (coste !== null) totalCoste += coste * ratio;
+            if (valor !== null) totalValor += valor * ratio;
+            else valorLoaded = false;
+        });
+
+        sumCantidad.textContent = totalCantidad.toFixed(4).replace(/\.?0+$/, '');
+        sumCoste.textContent   = totalCoste.toFixed(2);
+        sumValor.textContent    = valorLoaded ? totalValor.toFixed(2) : totalValor.toFixed(2) + ' *';
+        filterSummary.classList.remove('d-none');
+    }
 
     function applyFilter() {
         const ticker = tickerFilter.value.trim().toUpperCase();
@@ -153,16 +199,67 @@
 
         const hasFilter = ticker || broker;
         clearBtn.style.display = hasFilter ? '' : 'none';
-        countLabel.textContent = hasFilter ? visible + ' operación' + (visible !== 1 ? 'es' : '') : '';
+        countLabel.textContent = hasFilter ? (visible === 1 ? '1 operación' : visible + ' operaciones') : '';
+        updateSummary();
     }
 
-    tickerFilter.addEventListener('input', applyFilter);
-    brokerFilter.addEventListener('input', applyFilter);
+    // Restaurar filtro guardado en sesión
+    tickerFilter.value = sessionStorage.getItem('ops.tickerFilter') || '';
+    brokerFilter.value = sessionStorage.getItem('ops.brokerFilter') || '';
+    applyFilter();
+
+    tickerFilter.addEventListener('input', () => {
+        sessionStorage.setItem('ops.tickerFilter', tickerFilter.value);
+        applyFilter();
+    });
+    brokerFilter.addEventListener('input', () => {
+        sessionStorage.setItem('ops.brokerFilter', brokerFilter.value);
+        applyFilter();
+    });
     clearBtn.addEventListener('click', () => {
         tickerFilter.value = '';
         brokerFilter.value = '';
+        sessionStorage.removeItem('ops.tickerFilter');
+        sessionStorage.removeItem('ops.brokerFilter');
         applyFilter();
         tickerFilter.focus();
+    });
+
+    // ── Valor actual (cierre anterior × cantidad) ──────────────────────────
+    // Agrupar filas por ISIN para hacer una sola llamada por ticker
+    const rowsByIsin = new Map();
+    document.querySelectorAll('tr[data-isin]').forEach(row => {
+        const isin = row.dataset.isin;
+        if (!rowsByIsin.has(isin)) rowsByIsin.set(isin, []);
+        rowsByIsin.get(isin).push(row);
+    });
+
+    rowsByIsin.forEach(async (rows, isin) => {
+        const cell = row => row.querySelector('.cell-valor');
+        try {
+            const resp = await fetch(`/api/quote?isin=${encodeURIComponent(isin)}`);
+            if (!resp.ok) { rows.forEach(r => { cell(r).textContent = '—'; }); return; }
+
+            const q = await resp.json();
+            const inEur = q.originalCurrency === 'EUR' || q.convertedToEur;
+            rows.forEach(r => {
+                const qty   = parseFloat(r.dataset.qty);
+                const total = parseFloat(r.dataset.total);
+                const valor = qty * q.previousClose;
+                const c     = cell(r);
+                c.classList.remove('text-muted');
+                c.textContent = inEur
+                    ? valor.toFixed(2) + (q.convertedToEur ? ' *' : '')
+                    : valor.toFixed(2) + ' ' + q.originalCurrency;
+                if (inEur) {
+                    c.style.color      = valor >= total ? '#198754' : '#dc3545';
+                    c.style.fontWeight = '600';
+                }
+            });
+            updateSummary();
+        } catch {
+            rows.forEach(r => { cell(r).textContent = '—'; });
+        }
     });
 </script>
 </body>

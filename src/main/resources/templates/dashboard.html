@@ -1,10 +1,10 @@
 <!DOCTYPE html>
 <html xmlns:th="http://www.thymeleaf.org" lang="es">
-<head th:replace="~{fragments/layout :: head('Dashboard')}"></head>
+<head th:replace="~{fragments/layout :: head('Dashboard')}"><title>Bolsa</title></head>
 <body>
 <nav th:replace="~{fragments/layout :: navbar}"></nav>
 
-<div class="container">
+<div class="container-fluid px-4">
 
     <!-- Alertas flash -->
     <div th:if="${success}" class="alert alert-success alert-dismissible fade show" role="alert">
@@ -22,79 +22,234 @@
         No hay posiciones abiertas. <a href="/operations/new">Registra tu primera compra</a>.
     </div>
 
+    <div th:unless="${#lists.isEmpty(portfolio)}" class="row g-3 mb-3">
+        <div class="col-sm-4">
+            <div class="card text-center shadow-sm">
+                <div class="card-body">
+                    <div class="text-muted small">Total invertido</div>
+                    <div class="fs-5 fw-bold" th:text="${#numbers.formatDecimal(totalCost, 1, 2) + ' €'}"></div>
+                </div>
+            </div>
+        </div>
+        <div class="col-sm-4">
+            <div class="card text-center shadow-sm">
+                <div class="card-body">
+                    <div class="text-muted small">Beneficio latente (€)</div>
+                    <div class="fs-5 fw-bold" id="summary-latent-eur">…</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-sm-4">
+            <div class="card text-center shadow-sm">
+                <div class="card-body">
+                    <div class="text-muted small">Beneficio latente (%)</div>
+                    <div class="fs-5 fw-bold" id="summary-latent-pct">…</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div class="card shadow-sm mb-4" th:unless="${#lists.isEmpty(portfolio)}">
         <div class="table-responsive">
             <table class="table table-hover align-middle mb-0">
-                <thead class="table-dark">
+                <thead class="table-dark" id="portfolioHead">
                 <tr>
-                    <th>Nombre</th>
-                    <th>ISIN</th>
-                    <th class="text-end">Cantidad</th>
-                    <th class="text-end">Coste total (€)</th>
-                    <th class="text-end">% cartera</th>
-                    <th class="text-end">Precio medio (€)</th>
+                    <th data-sort="text">Nombre <span class="sort-icon text-secondary ms-1">⇅</span></th>
+                    <th data-sort="text">ISIN <span class="sort-icon text-secondary ms-1">⇅</span></th>
+                    <th class="text-end" data-sort="num">Cantidad <span class="sort-icon text-secondary ms-1">⇅</span></th>
+                    <th class="text-end" data-sort="num">Coste total (€) <span class="sort-icon text-secondary ms-1">⇅</span></th>
+                    <th class="text-end" data-sort="num">% cartera <span class="sort-icon text-secondary ms-1">⇅</span></th>
+                    <th class="text-end" data-sort="num">Precio medio (€) <span class="sort-icon text-secondary ms-1">⇅</span></th>
+                    <th class="text-end" data-sort="num">Último cierre (€) <span class="sort-icon text-secondary ms-1">⇅</span></th>
+                    <th class="text-end" data-sort="num">± vs precio medio <span class="sort-icon text-secondary ms-1">⇅</span></th>
+                    <th class="text-end" data-sort="num">± latente (€) <span class="sort-icon text-secondary ms-1">⇅</span></th>
                 </tr>
                 </thead>
                 <tbody>
-                <tr th:each="item : ${portfolio}">
+                <tr th:each="item : ${portfolio}"
+                    th:attr="data-isin=${item.assetName()},data-qty=${item.totalQty()},data-cost=${item.totalCost()},data-avg=${item.avgCost()}">
                     <td><strong th:text="${item.ticker()}"></strong></td>
                     <td th:text="${item.assetName()}"></td>
-                    <td class="text-end" th:text="${@fmt.qty(item.totalQty())}"></td>
+                    <td class="text-end" th:text="${#numbers.formatDecimal(item.totalQty(), 1, 4)}"></td>
                     <td class="text-end" th:text="${#numbers.formatDecimal(item.totalCost(), 1, 2)}"></td>
                     <td class="text-end" th:text="${#numbers.formatDecimal(portfolioPercent[item.ticker()], 1, 2) + ' %'}"></td>
-                    <td class="text-end" th:text="${#numbers.formatDecimal(item.avgCost(), 1, 4)}"></td>
+                    <td class="text-end" th:text="${#numbers.formatDecimal(item.avgCost(), 1, 2)}"></td>
+                    <td class="text-end text-muted small cell-price">…</td>
+                    <td class="text-end text-muted small cell-pct">…</td>
+                    <td class="text-end text-muted small cell-latent">…</td>
                 </tr>
                 </tbody>
             </table>
         </div>
     </div>
 
-    <h4 class="mb-3"><i class="bi bi-clock-history me-2"></i>Últimas operaciones</h4>
+    <h4 class="mb-3"><i class="bi bi-bar-chart-line me-2"></i>Resultado por ejercicio fiscal</h4>
 
-    <div class="card shadow-sm">
-        <div class="table-responsive">
-            <table class="table table-hover align-middle mb-0">
-                <thead class="table-dark">
-                <tr>
-                    <th>Fecha</th>
-                    <th>Tipo</th>
-                    <th>Nombre</th>
-                    <th>ISIN</th>
-                    <th class="text-end">Cantidad</th>
-                    <th class="text-end">Precio (€)</th>
-                    <th class="text-end">Total (€)</th>
-                    <th>Broker</th>
-                </tr>
-                </thead>
-                <tbody>
-                <tr th:each="op : ${recentOps}">
-                    <td th:text="${#temporals.format(op.date, 'dd/MM/yyyy')}"></td>
-                    <td>
-                        <span th:if="${op.type.name() == 'BUY'}"
-                              class="badge badge-buy">Compra</span>
-                        <span th:unless="${op.type.name() == 'BUY'}"
-                              class="badge badge-sell">Venta</span>
-                    </td>
-                    <td><strong th:text="${op.ticker}"></strong></td>
-                    <td th:text="${op.assetName}"></td>
-                    <td class="text-end" th:text="${@fmt.qty(op.quantity)}"></td>
-                    <td class="text-end" th:text="${#numbers.formatDecimal(op.price, 1, 4)}"></td>
-                    <td class="text-end" th:text="${#numbers.formatDecimal(op.total, 1, 2)}"></td>
-                    <td th:text="${op.broker}"></td>
-                </tr>
-                <tr th:if="${#lists.isEmpty(recentOps)}">
-                    <td colspan="8" class="text-center text-muted py-3">Sin operaciones registradas.</td>
-                </tr>
-                </tbody>
-            </table>
-        </div>
-        <div class="card-footer text-end">
-            <a href="/operations" class="btn btn-outline-secondary btn-sm">Ver todas</a>
-        </div>
+    <div th:if="${#lists.isEmpty(salesByYear)}" class="alert alert-info">
+        No hay ventas registradas aún.
     </div>
+
+    <th:block th:each="summary : ${salesByYear}">
+        <div class="card shadow-sm mb-3">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <strong th:text="${summary.year()}"></strong>
+                <span>
+                    <span class="text-muted me-2" th:text="${#numbers.formatDecimal(summary.yearCostBasis(), 1, 2) + ' € invertidos'}"></span>
+                    <span th:classappend="${summary.yearGainLoss().signum() >= 0} ? 'gain-pos' : 'gain-neg'"
+                          class="fw-semibold"
+                          th:text="${(summary.yearGainLoss().signum() >= 0 ? '+' : '') + #numbers.formatDecimal(summary.yearGainLoss(), 1, 2) + ' €'}"></span>
+                    <span th:classappend="${summary.yearGainLossPercent().signum() >= 0} ? 'gain-pos' : 'gain-neg'"
+                          class="ms-1"
+                          th:text="${'(' + (summary.yearGainLossPercent().signum() >= 0 ? '+' : '') + #numbers.formatDecimal(summary.yearGainLossPercent(), 1, 2) + ' %)'}"></span>
+                    <a th:href="@{/sales(year=${summary.year()})}" class="btn btn-outline-secondary btn-sm ms-3">Detalle AEAT</a>
+                </span>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0">
+                    <thead class="table-light">
+                    <tr>
+                        <th>Valor</th>
+                        <th class="text-end">Val. adquisición (€)</th>
+                        <th class="text-end">Ganancia / Pérdida (€)</th>
+                        <th class="text-end">Rentabilidad (%)</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <tr th:each="t : ${summary.tickers()}">
+                        <td>
+                            <strong th:text="${t.ticker()}"></strong>
+                            <span class="text-muted ms-1 small" th:text="${t.assetName()}"></span>
+                        </td>
+                        <td class="text-end" th:text="${#numbers.formatDecimal(t.totalCost(), 1, 2)}"></td>
+                        <td class="text-end"
+                            th:classappend="${t.gainLoss().signum() >= 0} ? 'gain-pos' : 'gain-neg'"
+                            th:text="${(t.gainLoss().signum() >= 0 ? '+' : '') + #numbers.formatDecimal(t.gainLoss(), 1, 2)}"></td>
+                        <td class="text-end"
+                            th:classappend="${t.gainLossPercent().signum() >= 0} ? 'gain-pos' : 'gain-neg'"
+                            th:text="${(t.gainLossPercent().signum() >= 0 ? '+' : '') + #numbers.formatDecimal(t.gainLossPercent(), 1, 2) + ' %'}"></td>
+                    </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </th:block>
 
 </div>
 
 <div th:replace="~{fragments/layout :: scripts}"></div>
+<script>
+    // ── Ordenación de la tabla de cartera ─────────────────────────────────────
+    (function () {
+        const thead  = document.getElementById('portfolioHead');
+        const tbody  = thead.closest('table').querySelector('tbody');
+        let sortCol  = -1, sortAsc = true;
+
+        function cellValue(row, col, type) {
+            const text = row.cells[col].textContent.trim();
+            if (text === '…' || text === '—') return type === 'num' ? -Infinity : '\uffff';
+            if (type === 'num') {
+                const n = parseFloat(text.replace(/[^0-9.,-]/g, '').replace(',', '.'));
+                return isNaN(n) ? -Infinity : n;
+            }
+            return text.toLowerCase();
+        }
+
+        thead.querySelectorAll('th[data-sort]').forEach((th, col) => {
+            th.style.cursor = 'pointer';
+            th.addEventListener('click', () => {
+                sortAsc = sortCol === col ? !sortAsc : true;
+                sortCol = col;
+                const type = th.dataset.sort;
+
+                Array.from(tbody.rows)
+                    .sort((a, b) => {
+                        const av = cellValue(a, col, type);
+                        const bv = cellValue(b, col, type);
+                        if (av === -Infinity && bv === -Infinity) return 0;
+                        if (av === -Infinity) return 1;
+                        if (bv === -Infinity) return -1;
+                        return sortAsc
+                            ? (av < bv ? -1 : av > bv ? 1 : 0)
+                            : (av > bv ? -1 : av < bv ? 1 : 0);
+                    })
+                    .forEach(row => tbody.appendChild(row));
+
+                thead.querySelectorAll('.sort-icon').forEach((ic, i) => {
+                    ic.textContent = i === col ? (sortAsc ? '▲' : '▼') : '⇅';
+                    ic.style.color = i === col ? '#fff' : '';
+                });
+            });
+        });
+    })();
+
+    // ── Cotizaciones y beneficio latente ──────────────────────────────────────
+    const GREEN = '#198754', RED = '#dc3545', MUTED = '#6c757d';
+
+    const rows = document.querySelectorAll('tr[data-isin]');
+    const totalCost = [[${totalCost}]];
+    let latentTotal = 0;
+    const summaryEur = document.getElementById('summary-latent-eur');
+    const summaryPct = document.getElementById('summary-latent-pct');
+
+    function updateLatentTotal(euros) {
+        latentTotal += euros;
+        const sign = latentTotal >= 0 ? '+' : '';
+        const c    = latentTotal >= 0 ? GREEN : RED;
+        summaryEur.textContent = sign + latentTotal.toFixed(2) + ' €';
+        summaryEur.style.color = c;
+        const pct = totalCost > 0 ? latentTotal / totalCost * 100 : 0;
+        summaryPct.textContent = sign + pct.toFixed(2) + ' %';
+        summaryPct.style.color = c;
+    }
+
+    function color(cell, value) {
+        cell.classList.remove('text-muted');
+        cell.style.color      = value >= 0 ? GREEN : RED;
+        cell.style.fontWeight = '600';
+    }
+    function setDash(...cells) {
+        cells.forEach(c => { c.textContent = '—'; c.classList.add('text-muted'); });
+    }
+
+    rows.forEach(async row => {
+        const isin      = row.dataset.isin;
+        const qty       = parseFloat(row.dataset.qty);
+        const totalCost = parseFloat(row.dataset.cost);
+        const avgCost   = parseFloat(row.dataset.avg);
+        const cellPrice  = row.querySelector('.cell-price');
+        const cellPct    = row.querySelector('.cell-pct');
+        const cellLatent = row.querySelector('.cell-latent');
+
+        try {
+            const resp = await fetch(`/api/quote?isin=${encodeURIComponent(isin)}`);
+            if (!resp.ok) { setDash(cellPrice, cellPct, cellLatent); return; }
+
+            const q     = await resp.json();
+            const price = q.previousClose;
+            const inEur = q.originalCurrency === 'EUR' || q.convertedToEur;
+
+            const priceLabel = price.toFixed(2) + ' €' + (q.convertedToEur ? ' *' : '');
+            cellPrice.textContent = priceLabel;
+            color(cellPrice, price - avgCost);
+
+            if (inEur) {
+                const pct = avgCost > 0 ? (price - avgCost) / avgCost * 100 : 0;
+                cellPct.textContent = (pct >= 0 ? '+' : '') + pct.toFixed(2) + ' %';
+                color(cellPct, pct);
+
+                const euros = qty * (price - avgCost);
+                cellLatent.textContent = (euros >= 0 ? '+' : '') + euros.toFixed(2) + ' €';
+                color(cellLatent, euros);
+                updateLatentTotal(euros);
+            } else {
+                cellPrice.textContent = price.toFixed(2) + ' ' + q.originalCurrency;
+                color(cellPrice, 0);
+                setDash(cellPct, cellLatent);
+            }
+        } catch {
+            setDash(cellPrice, cellPct, cellLatent);
+        }
+    });
+</script>
 </body>
 </html>

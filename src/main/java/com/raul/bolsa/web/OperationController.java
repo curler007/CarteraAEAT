@@ -9,7 +9,9 @@ import com.raul.bolsa.repository.OperationRepository;
 import com.raul.bolsa.repository.SaleRecordRepository;
 import com.raul.bolsa.service.OperationService;
 import com.raul.bolsa.web.dto.OperationForm;
+import com.raul.bolsa.web.dto.SaleYearSummary;
 import com.raul.bolsa.web.dto.TickerInfo;
+import com.raul.bolsa.web.dto.TickerYearResult;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Controller;
@@ -19,11 +21,13 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.format.DateTimeFormatter;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
 import java.util.stream.Collectors;
 
 @Controller
@@ -60,10 +64,61 @@ public class OperationController {
                                         .divide(totalCost, 2, java.math.RoundingMode.HALF_UP)
                 ));
 
+        // Ventas agrupadas por año y ticker para el resumen del dashboard
+        List<SaleYearSummary> salesByYear = saleRecordRepo.findAll().stream()
+                .collect(Collectors.groupingBy(
+                        SaleRecord::getTaxYear,
+                        TreeMap::new,
+                        Collectors.toList()))
+                .entrySet().stream()
+                .sorted(Map.Entry.<Integer, List<com.raul.bolsa.domain.SaleRecord>>comparingByKey().reversed())
+                .map(yearEntry -> {
+                    int year = yearEntry.getKey();
+                    List<com.raul.bolsa.domain.SaleRecord> yearRecords = yearEntry.getValue();
+
+                    List<TickerYearResult> tickers = yearRecords.stream()
+                            .collect(Collectors.groupingBy(
+                                    sr -> sr.getTicker(),
+                                    TreeMap::new,
+                                    Collectors.toList()))
+                            .entrySet().stream()
+                            .map(tickerEntry -> {
+                                List<com.raul.bolsa.domain.SaleRecord> recs = tickerEntry.getValue();
+                                String assetName = recs.get(0).getAssetName();
+                                BigDecimal cost = recs.stream()
+                                        .map(com.raul.bolsa.domain.SaleRecord::getCostBasis)
+                                        .reduce(BigDecimal.ZERO, BigDecimal::add);
+                                BigDecimal gl = recs.stream()
+                                        .map(com.raul.bolsa.domain.SaleRecord::getGainLoss)
+                                        .reduce(BigDecimal.ZERO, BigDecimal::add);
+                                BigDecimal pct = cost.compareTo(BigDecimal.ZERO) == 0
+                                        ? BigDecimal.ZERO
+                                        : gl.multiply(BigDecimal.valueOf(100))
+                                                .divide(cost, 2, RoundingMode.HALF_UP);
+                                return new TickerYearResult(tickerEntry.getKey(), assetName, cost, gl, pct);
+                            })
+                            .sorted(Comparator.comparing(TickerYearResult::gainLossPercent).reversed())
+                            .toList();
+
+                    BigDecimal yearCost = yearRecords.stream()
+                            .map(com.raul.bolsa.domain.SaleRecord::getCostBasis)
+                            .reduce(BigDecimal.ZERO, BigDecimal::add);
+                    BigDecimal yearGl = yearRecords.stream()
+                            .map(com.raul.bolsa.domain.SaleRecord::getGainLoss)
+                            .reduce(BigDecimal.ZERO, BigDecimal::add);
+                    BigDecimal yearPct = yearCost.compareTo(BigDecimal.ZERO) == 0
+                            ? BigDecimal.ZERO
+                            : yearGl.multiply(BigDecimal.valueOf(100))
+                                    .divide(yearCost, 2, RoundingMode.HALF_UP);
+
+                    return new SaleYearSummary(year, tickers, yearGl, yearCost, yearPct);
+                })
+                .toList();
+
         model.addAttribute("portfolio", portfolio);
         model.addAttribute("portfolioPercent", portfolioPercent);
-        model.addAttribute("recentOps", operationRepo.findAllByOrderByDateDescIdDesc()
-                .stream().limit(10).toList());
+        model.addAttribute("totalCost", totalCost);
+        model.addAttribute("salesByYear", salesByYear);
         return "dashboard";
     }
 
@@ -89,6 +144,14 @@ public class OperationController {
                         (a, b) -> a
                 ));
         model.addAttribute("lotRowClass", lotRowClass);
+
+        Map<Long, BigDecimal> lotRemainingQty = fifoLotRepo.findAll().stream()
+                .collect(Collectors.toMap(
+                        lot -> lot.getOperation().getId(),
+                        lot -> lot.getRemainingQty(),
+                        (a, b) -> a
+                ));
+        model.addAttribute("lotRemainingQty", lotRemainingQty);
 
         // Contador acumulado de títulos por ticker tras cada operación (orden cronológico ASC)
         List<Operation> chronological = operations.stream()
