@@ -7,7 +7,9 @@ import com.raul.bolsa.domain.SaleRecord;
 import com.raul.bolsa.repository.FifoLotRepository;
 import com.raul.bolsa.repository.OperationRepository;
 import com.raul.bolsa.repository.SaleRecordRepository;
+import com.raul.bolsa.repository.SplitRepository;
 import com.raul.bolsa.service.OperationService;
+import com.raul.bolsa.web.dto.HistoryRow;
 import com.raul.bolsa.web.dto.OperationForm;
 import com.raul.bolsa.web.dto.SaleYearSummary;
 import com.raul.bolsa.web.dto.TickerInfo;
@@ -23,6 +25,7 @@ import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
@@ -39,7 +42,9 @@ public class OperationController {
     private final OperationRepository operationRepo;
     private final FifoLotRepository fifoLotRepo;
     private final SaleRecordRepository saleRecordRepo;
+    private final SplitRepository splitRepo;
     private final OperationService operationService;
+    private final com.raul.bolsa.service.SplitService splitService;
 
     @GetMapping("/")
     public String root() {
@@ -125,7 +130,6 @@ public class OperationController {
     @GetMapping("/operations")
     public String list(Model model) {
         List<Operation> operations = operationRepo.findAllByOrderByDateDescIdDesc();
-        model.addAttribute("operations", operations);
 
         // CSS class por operationId para sombrear compras según consumo del lote:
         //   verde  → totalmente consumida (remainingQty == 0)
@@ -139,7 +143,8 @@ public class OperationController {
                         lot -> {
                             if (lot.getRemainingQty().compareTo(BigDecimal.ZERO) == 0)
                                 return "table-secondary";
-                            if (lot.getRemainingQty().compareTo(lot.getInitialQty()) < 0)
+                            // Comparar costes, no cantidades: tras un split remainingQty > initialQty
+                            if (lot.getRemainingCost().compareTo(lot.getInitialCost()) < 0)
                                 return "table-warning";
                             return "";
                         },
@@ -155,21 +160,39 @@ public class OperationController {
                 ));
         model.addAttribute("lotRemainingQty", lotRemainingQty);
 
-        // Contador acumulado de títulos por ticker tras cada operación (orden cronológico ASC)
+        Map<Long, BigDecimal> lotRemainingCost = allLots.stream()
+                .collect(Collectors.toMap(
+                        lot -> lot.getOperation().getId(),
+                        lot -> lot.getRemainingCost(),
+                        (a, b) -> a
+                ));
+        model.addAttribute("lotRemainingCost", lotRemainingCost);
+
+        // Cargar splits una sola vez y agrupar por ticker (reutilizado en running balance e history)
+        List<com.raul.bolsa.domain.Split> allSplits = splitRepo.findAll();
+        Map<String, List<com.raul.bolsa.domain.Split>> splitsByTicker = allSplits.stream()
+                .collect(Collectors.groupingBy(s -> s.getTicker().toUpperCase()));
+
+        // Saldo acumulado por ticker tras cada operación, expresado en acciones actuales.
+        // Cada qty se multiplica por el factor acumulado de splits ocurridos después de su fecha,
+        // de forma que el saldo refleja siempre las acciones en términos post-split vigentes.
+        java.time.LocalDate today = java.time.LocalDate.now();
         List<Operation> chronological = operations.stream()
-                .sorted(java.util.Comparator.comparing(Operation::getDate)
+                .sorted(Comparator.comparing(Operation::getDate)
                         .thenComparingLong(Operation::getId))
                 .toList();
         Map<String, BigDecimal> runningByTicker = new HashMap<>();
         Map<Long, BigDecimal> runningBalance = new HashMap<>();
         for (Operation op : chronological) {
             String ticker = op.getTicker().toUpperCase();
+            List<com.raul.bolsa.domain.Split> tickerSplits =
+                    splitsByTicker.getOrDefault(ticker, List.of());
+            BigDecimal factor = splitService.cumulativeFactor(tickerSplits, op.getDate(), today);
+            BigDecimal adjustedQty = op.getQuantity().multiply(factor);
             BigDecimal current = runningByTicker.getOrDefault(ticker, BigDecimal.ZERO);
-            if (op.getType() == OperationType.SELL) {
-                current = current.subtract(op.getQuantity());
-            } else {
-                current = current.add(op.getQuantity());
-            }
+            current = op.getType() == OperationType.SELL
+                    ? current.subtract(adjustedQty)
+                    : current.add(adjustedQty);
             runningByTicker.put(ticker, current);
             runningBalance.put(op.getId(), current);
         }
@@ -188,6 +211,21 @@ public class OperationController {
                                 .collect(Collectors.joining("<br>"))
                 ));
         model.addAttribute("sellTooltip", sellTooltip);
+
+        // Lista unificada de operaciones + splits ordenada por fecha DESC
+        List<HistoryRow> history = new ArrayList<>();
+        operations.forEach(op -> history.add(new HistoryRow(op.getDate(), op, null)));
+        allSplits.forEach(s -> history.add(new HistoryRow(s.getDate(), null, s)));
+        history.sort((a, b) -> {
+            int cmp = b.date().compareTo(a.date());
+            if (cmp != 0) return cmp;
+            // Mismo día: splits antes que operaciones
+            if (a.split() != null && b.split() == null) return -1;
+            if (a.split() == null && b.split() != null) return 1;
+            if (a.split() != null) return b.split().getId().compareTo(a.split().getId());
+            return b.operation().getId().compareTo(a.operation().getId());
+        });
+        model.addAttribute("history", history);
 
         return "operations/list";
     }

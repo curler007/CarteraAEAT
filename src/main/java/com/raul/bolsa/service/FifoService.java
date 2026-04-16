@@ -4,9 +4,11 @@ import com.raul.bolsa.domain.FifoLot;
 import com.raul.bolsa.domain.Operation;
 import com.raul.bolsa.domain.OperationType;
 import com.raul.bolsa.domain.SaleRecord;
+import com.raul.bolsa.domain.Split;
 import com.raul.bolsa.repository.FifoLotRepository;
 import com.raul.bolsa.repository.OperationRepository;
 import com.raul.bolsa.repository.SaleRecordRepository;
+import com.raul.bolsa.repository.SplitRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -26,6 +28,7 @@ public class FifoService {
     private final FifoLotRepository fifoLotRepo;
     private final SaleRecordRepository saleRecordRepo;
     private final OperationRepository operationRepo;
+    private final SplitRepository splitRepo;
 
     /**
      * Registra un lote de compra.
@@ -184,15 +187,18 @@ public class FifoService {
 
     /**
      * Recalcula el FIFO completo para un ticker dado.
-     * Se invoca cuando se detecta una inserción desordenada o al eliminar operaciones.
+     * Se invoca cuando se detecta una inserción desordenada, al eliminar operaciones
+     * o al guardar/eliminar un split.
      *
      * Algoritmo:
      *   1. Eliminar todos los SaleRecords del ticker.
      *   2. Resetear todos los FifoLots a su estado inicial (CANJE lots quedan a coste 0).
-     *   3. Reprocesar todas las operaciones del ticker en orden cronológico:
+     *   3. Reprocesar en orden cronológico mezclando operaciones y splits:
+     *      - Splits con fecha <= fecha de la siguiente operación se aplican primero.
      *      - CANJE → processCanje (redistribuye coste)
      *      - SELL  → processSell (consume lotes FIFO)
      *      - BUY   → el lote ya existe reseteado, no hace falta acción
+     *      - SPLIT → multiplica remainingQty de todos los lotes abiertos por el ratio
      */
     @Transactional
     public void recalculateFifo(String ticker) {
@@ -206,17 +212,44 @@ public class FifoService {
             fifoLotRepo.save(lot);
         });
 
-        // 3. Reprocesar en orden cronológico
-        operationRepo.findByTickerOrderByDateAscIdAsc(ticker).forEach(op -> {
-            if (op.getType() == OperationType.CANJE) {
-                processCanje(op);
-            } else if (op.getType() == OperationType.SELL) {
-                op.setPendingQty(BigDecimal.ZERO);
-                operationRepo.save(op);
-                processSell(op);
+        // 3. Reprocesar en orden cronológico, splits antes que operaciones del mismo día
+        List<Split> splits = splitRepo.findByTickerOrderByDateAscIdAsc(ticker);
+        List<Operation> ops = operationRepo.findByTickerOrderByDateAscIdAsc(ticker);
+        int si = 0, oi = 0;
+
+        while (si < splits.size() || oi < ops.size()) {
+            boolean takeSplit = si < splits.size() && (oi >= ops.size()
+                    || !splits.get(si).getDate().isAfter(ops.get(oi).getDate()));
+
+            if (takeSplit) {
+                applySplitToOpenLots(splits.get(si++));
+            } else {
+                Operation op = ops.get(oi++);
+                if (op.getType() == OperationType.CANJE) {
+                    processCanje(op);
+                } else if (op.getType() == OperationType.SELL) {
+                    op.setPendingQty(BigDecimal.ZERO);
+                    operationRepo.save(op);
+                    processSell(op);
+                }
+                // BUY: lote ya reseteado, sin acción adicional
             }
-            // BUY: lote ya reseteado, sin acción adicional
-        });
+        }
+    }
+
+    /**
+     * Multiplica la cantidad restante de todos los lotes abiertos del ticker
+     * por el ratio del split. El coste no varía.
+     */
+    private void applySplitToOpenLots(Split split) {
+        fifoLotRepo.findByTickerOrderByPurchaseDateAscIdAsc(split.getTicker()).stream()
+                .filter(lot -> lot.getRemainingQty().compareTo(ZERO) > 0)
+                .forEach(lot -> {
+                    lot.setRemainingQty(lot.getRemainingQty()
+                            .multiply(split.getRatio())
+                            .setScale(SCALE, RoundingMode.HALF_UP));
+                    fifoLotRepo.save(lot);
+                });
     }
 
     /**

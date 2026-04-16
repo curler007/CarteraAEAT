@@ -59,69 +59,100 @@
                     <th>Ticker</th>
                     <th>Nombre</th>
                     <th>Broker</th>
-                    <th>Grupo AEAT</th>
                     <th class="text-end">Cantidad</th>
                     <th class="text-end">Precio (€)</th>
                     <th class="text-end">Comisión (€)</th>
                     <th class="text-end">Total (€)</th>
-                    <th class="text-end">Valor actual (€)</th>
+                    <th class="text-end">Actual (€)</th>
                     <th class="text-end">Saldo</th>
                     <th></th>
                 </tr>
                 </thead>
                 <tbody>
-                <tr th:each="op : ${operations}"
-                    th:attr="data-isin=${op.assetName},data-qty=${op.quantity},data-total=${op.total},data-remaining=${lotRemainingQty[op.id] ?: op.quantity}"
-    th:classappend="${op.pending} ? 'table-danger' : (${op.type.name() == 'SELL'} ? 'table-secondary' : (${lotRowClass[op.id]} ?: ''))">
-                    <td th:text="${#temporals.format(op.date, 'dd/MM/yyyy')}"></td>
-                    <td>
-                        <span th:if="${op.type.name() == 'BUY'}"
-                              class="badge badge-buy">Compra</span>
-                        <span th:if="${op.type.name() == 'SELL'}"
-                              class="badge badge-sell">Venta</span>
-                        <span th:if="${op.type.name() == 'CANJE'}"
-                              class="badge bg-info text-dark">Canje</span>
-                        <span th:if="${op.pending}"
-                              class="badge bg-warning text-dark ms-1"
-                              th:text="'⏳ ' + ${@fmt.qty(op.pendingQty)}">
-                        </span>
-                    </td>
-                    <td><strong th:text="${op.ticker}"></strong></td>
-                    <td th:text="${op.assetName}"></td>
-                    <td th:text="${op.broker}"></td>
-                    <td th:text="${op.aeatGroup.label}"></td>
-                    <td class="text-end" th:text="${@fmt.qty(op.quantity)}"></td>
-                    <td class="text-end" th:text="${#numbers.formatDecimal(op.price, 1, 4)}"></td>
-                    <td class="text-end" th:text="${#numbers.formatDecimal(op.commission, 1, 2)}"></td>
-                    <td class="text-end"><strong th:text="${#numbers.formatDecimal(op.total, 1, 2)}"></strong></td>
-                    <td class="text-end text-muted small cell-valor">…</td>
-                    <td class="text-end text-muted"
-                        th:if="${op.type.name() != 'SELL'}"
-                        th:text="${@fmt.qty(runningBalance[op.id])}"></td>
-                    <td class="text-end text-muted"
-                        th:if="${op.type.name() == 'SELL'}"
-                        th:text="${@fmt.qty(runningBalance[op.id])}"
-                        th:attr="data-bs-toggle=${sellTooltip[op.id] != null ? 'tooltip' : ''},
-                                 data-bs-html='true',
-                                 data-bs-title=${sellTooltip[op.id]}">
-                    </td>
-                    <td class="text-end">
-                        <div class="d-flex gap-1 justify-content-end">
-                            <a th:href="@{/operations/{id}/edit(id=${op.id})}"
-                               class="btn btn-outline-secondary btn-sm">
-                                <i class="bi bi-pencil"></i>
-                            </a>
-                            <form th:action="@{/operations/{id}/delete(id=${op.id})}"
-                                  method="post"
-                                  onsubmit="return confirm('¿Eliminar esta operación?');">
-                                <button type="submit" class="btn btn-outline-danger btn-sm">
-                                    <i class="bi bi-trash"></i>
-                                </button>
-                            </form>
-                        </div>
-                    </td>
-                </tr>
-                <tr th:if="${#lists.isEmpty(operations)}">
+                <th:block th:each="row : ${history}">
+
+                    <!-- Fila de SPLIT -->
+                    <tr th:if="${row.split != null}"
+                        class="table-warning"
+                        th:attr="data-ticker=${row.split.ticker},data-is-split=true">
+                        <td th:text="${#temporals.format(row.split.date, 'dd/MM/yyyy')}"></td>
+                        <td>
+                            <span class="badge bg-warning text-dark">
+                                Split ×<span th:text="${row.split.ratio.stripTrailingZeros().toPlainString()}"></span>
+                            </span>
+                        </td>
+                        <td><strong th:text="${row.split.ticker}"></strong></td>
+                        <td colspan="8" class="text-muted small">División de acciones</td>
+                        <td class="text-end">
+                            <div class="d-flex gap-1 justify-content-end">
+                                <a th:href="@{/splits/{id}/edit(id=${row.split.id})}"
+                                   class="btn btn-outline-secondary btn-sm">
+                                    <i class="bi bi-pencil"></i>
+                                </a>
+                                <form th:action="@{/splits/{id}/delete(id=${row.split.id})}" method="post"
+                                      onsubmit="return confirm('¿Eliminar este split?');">
+                                    <button type="submit" class="btn btn-outline-danger btn-sm">
+                                        <i class="bi bi-trash"></i>
+                                    </button>
+                                </form>
+                            </div>
+                        </td>
+                    </tr>
+
+                    <!-- Fila de OPERACIÓN -->
+                    <tr th:if="${row.operation != null}"
+                        th:attr="data-isin=${row.operation.assetName},data-qty=${row.operation.quantity},data-total=${row.operation.total},data-remaining=${lotRemainingQty[row.operation.id] ?: row.operation.quantity},data-remaining-cost=${lotRemainingCost[row.operation.id] ?: row.operation.total}"
+                        th:classappend="${row.operation.pending} ? 'table-danger' : (${row.operation.type.name() == 'SELL'} ? 'table-secondary' : (${lotRowClass[row.operation.id]} ?: ''))">
+                        <td th:text="${#temporals.format(row.operation.date, 'dd/MM/yyyy')}"></td>
+                        <td>
+                            <span th:if="${row.operation.type.name() == 'BUY'}"
+                                  class="badge badge-buy">Compra</span>
+                            <span th:if="${row.operation.type.name() == 'SELL'}"
+                                  class="badge badge-sell">Venta</span>
+                            <span th:if="${row.operation.type.name() == 'CANJE'}"
+                                  class="badge bg-info text-dark">Canje</span>
+                            <span th:if="${row.operation.pending}"
+                                  class="badge bg-warning text-dark ms-1"
+                                  th:text="'⏳ ' + ${@fmt.qty(row.operation.pendingQty)}">
+                            </span>
+                        </td>
+                        <td><strong th:text="${row.operation.ticker}"></strong></td>
+                        <td th:text="${row.operation.assetName}"></td>
+                        <td th:text="${row.operation.broker}"></td>
+                        <td class="text-end" th:text="${@fmt.qty(row.operation.quantity)}"></td>
+                        <td class="text-end" th:text="${#numbers.formatDecimal(row.operation.price, 1, 4)}"></td>
+                        <td class="text-end" th:text="${#numbers.formatDecimal(row.operation.commission, 1, 2)}"></td>
+                        <td class="text-end"><strong th:text="${#numbers.formatDecimal(row.operation.total, 1, 2)}"></strong></td>
+                        <td class="text-end text-muted small cell-valor">…</td>
+                        <td class="text-end text-muted"
+                            th:if="${row.operation.type.name() != 'SELL'}"
+                            th:text="${@fmt.qty(runningBalance[row.operation.id])}"></td>
+                        <td class="text-end text-muted"
+                            th:if="${row.operation.type.name() == 'SELL'}"
+                            th:text="${@fmt.qty(runningBalance[row.operation.id])}"
+                            th:attr="data-bs-toggle=${sellTooltip[row.operation.id] != null ? 'tooltip' : ''},
+                                     data-bs-html='true',
+                                     data-bs-title=${sellTooltip[row.operation.id]}">
+                        </td>
+                        <td class="text-end">
+                            <div class="d-flex gap-1 justify-content-end">
+                                <a th:href="@{/operations/{id}/edit(id=${row.operation.id})}"
+                                   class="btn btn-outline-secondary btn-sm">
+                                    <i class="bi bi-pencil"></i>
+                                </a>
+                                <form th:action="@{/operations/{id}/delete(id=${row.operation.id})}"
+                                      method="post"
+                                      onsubmit="return confirm('¿Eliminar esta operación?');">
+                                    <button type="submit" class="btn btn-outline-danger btn-sm">
+                                        <i class="bi bi-trash"></i>
+                                    </button>
+                                </form>
+                            </div>
+                        </td>
+                    </tr>
+
+                </th:block>
+                <tr th:if="${#lists.isEmpty(history)}">
                     <td colspan="13" class="text-center text-muted py-3">Sin operaciones. <a href="/operations/new">Registra la primera</a>.</td>
                 </tr>
                 </tbody>
@@ -148,8 +179,11 @@
 
     // Cachear ticker y broker en data-attributes al cargar
     document.querySelectorAll('#opsTable tbody tr').forEach(row => {
-        if (row.cells[2]) row.dataset.ticker = row.cells[2].textContent.trim().toUpperCase();
-        if (row.cells[4]) row.dataset.broker = row.cells[4].textContent.trim().toUpperCase();
+        // Splits ya tienen data-ticker en el HTML; sólo cachear broker para operaciones
+        if (!row.dataset.isSplit) {
+            if (row.cells[2]) row.dataset.ticker = row.cells[2].textContent.trim().toUpperCase();
+            if (row.cells[4]) row.dataset.broker = row.cells[4].textContent.trim().toUpperCase();
+        }
     });
 
     function parseNum(text) {
@@ -164,18 +198,17 @@
         let totalCantidad = 0, totalCoste = 0, totalValor = 0, valorLoaded = true;
         document.querySelectorAll('#opsTable tbody tr').forEach(row => {
             if (row.style.display === 'none' || !row.dataset.ticker) return;
+            if (row.dataset.isSplit) return;
             // Excluir ventas y compras totalmente consumidas
             if (row.classList.contains('table-secondary') ||
                 row.classList.contains('table-danger'))   return;
-            const qty       = parseFloat(row.dataset.qty);
-            const remaining = parseFloat(row.dataset.remaining);
+            const remaining     = parseFloat(row.dataset.remaining);
             if (!remaining || remaining <= 0) return;
-            const ratio  = qty > 0 ? remaining / qty : 1;
-            const coste  = parseNum(row.cells[9]?.textContent);
-            const valor  = parseNum(row.querySelector('.cell-valor')?.textContent);
+            const remainingCost = parseFloat(row.dataset.remainingCost);
+            const valor         = parseNum(row.querySelector('.cell-valor')?.textContent);
             totalCantidad += remaining;
-            if (coste !== null) totalCoste += coste * ratio;
-            if (valor !== null) totalValor += valor * ratio;
+            if (!isNaN(remainingCost)) totalCoste += remainingCost;
+            if (valor !== null) totalValor += valor;
             else valorLoaded = false;
         });
 
@@ -199,10 +232,11 @@
         document.querySelectorAll('#opsTable tbody tr').forEach(row => {
             if (!row.dataset.ticker) return;
             const matchTicker = !ticker || row.dataset.ticker.includes(ticker);
-            const matchBroker = !broker || row.dataset.broker.includes(broker);
+            // Splits no tienen broker; si hay filtro de broker, los splits siguen visibles si su ticker encaja
+            const matchBroker = !broker || row.dataset.isSplit || row.dataset.broker.includes(broker);
             const show = matchTicker && matchBroker;
             row.style.display = show ? '' : 'none';
-            if (show) visible++;
+            if (show && !row.dataset.isSplit) visible++;
         });
 
         const hasFilter = ticker || broker;
@@ -236,7 +270,7 @@
     // ── Valor actual (cierre anterior × cantidad) ──────────────────────────
     // Agrupar filas por ISIN para hacer una sola llamada por ticker
     const rowsByIsin = new Map();
-    document.querySelectorAll('tr[data-isin]').forEach(row => {
+    document.querySelectorAll('tr[data-isin]:not([data-is-split])').forEach(row => {
         const isin = row.dataset.isin;
         if (!rowsByIsin.has(isin)) rowsByIsin.set(isin, []);
         rowsByIsin.get(isin).push(row);
@@ -251,14 +285,17 @@
             const q = await resp.json();
             const inEur = q.originalCurrency === 'EUR' || q.convertedToEur;
             rows.forEach(r => {
-                const qty   = parseFloat(r.dataset.qty);
-                const total = parseFloat(r.dataset.total);
+                // Usar remaining (post-split) para el valor actual, total para comparar coste
+                const qty   = parseFloat(r.dataset.remaining);
+                const total = parseFloat(r.dataset.remainingCost);
                 const valor = qty * q.price;
                 const c     = cell(r);
                 c.classList.remove('text-muted');
                 c.textContent = inEur
                     ? valor.toFixed(2) + (q.convertedToEur ? ' *' : '')
                     : valor.toFixed(2) + ' ' + q.originalCurrency;
+                const diff = (100 * (valor - total) / total).toFixed(2);
+                c.textContent = c.textContent + ' (' + diff + '%)';
                 if (inEur) {
                     c.style.color      = valor >= total ? '#198754' : '#dc3545';
                     c.style.fontWeight = '600';
@@ -266,7 +303,7 @@
             });
             updateSummary();
         } catch {
-            rows.forEach(r => { cell(r).textContent = '—'; });
+            rows.forEach(r => { cell(r).textContent = '❌'; });
         }
     });
 </script>
