@@ -46,13 +46,19 @@
                     <a class="nav-link" href="/splits"><i class="bi bi-scissors me-1"></i>Splits</a>
                 </li>
             </ul>
-            <div class="d-flex gap-2">
+            <div class="d-flex gap-2 align-items-center">
                 <a class="btn btn-outline-light btn-sm" href="/splits/new">
                     <i class="bi bi-scissors me-1"></i>Nuevo split
                 </a>
                 <a class="btn btn-success btn-sm" href="/operations/new">
                     <i class="bi bi-plus-lg me-1"></i>Nueva operación
                 </a>
+                <form th:action="@{/logout}" method="post" class="mb-0">
+                    <input type="hidden" th:name="${_csrf.parameterName}" th:value="${_csrf.token}"/>
+                    <button type="submit" class="btn btn-outline-danger btn-sm">
+                        <i class="bi bi-box-arrow-right"></i>
+                    </button>
+                </form>
             </div>
         </div>
     </div>
