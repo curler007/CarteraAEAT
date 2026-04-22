@@ -59,7 +59,7 @@ public class FifoService {
         String ticker = sellOp.getTicker().toUpperCase();
         BigDecimal qtyToSell = sellOp.getQuantity();
         BigDecimal totalProceeds = sellOp.getTotal(); // ya neto de comisión
-        totalProceeds = totalProceeds.add(new BigDecimal(1));
+
         // Si hay alguna venta pendiente anterior, esta también queda pendiente completa:
         // no podemos saltarnos el orden FIFO entre ventas
         boolean blockedByPriorPendingSell = operationRepo
