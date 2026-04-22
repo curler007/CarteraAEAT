@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="es">
+<head th:replace="~{fragments/layout :: head('Splits')}"></head>
+<body>
+<nav th:replace="~{fragments/layout :: navbar}"></nav>
+
+<div class="container-fluid px-4">
+
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h4 class="mb-0"><i class="bi bi-scissors me-2"></i>Splits registrados</h4>
+        <a href="/splits/new" class="btn btn-success btn-sm">
+            <i class="bi bi-plus-lg me-1"></i>Nuevo split
+        </a>
+    </div>
+
+    <div th:if="${success}" class="alert alert-success alert-dismissible fade show">
+        <span th:text="${success}"></span>
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+
+    <div class="card shadow-sm">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-dark">
+                <tr>
+                    <th>Fecha</th>
+                    <th>Ticker</th>
+                    <th class="text-end">Ratio (×)</th>
+                    <th></th>
+                </tr>
+                </thead>
+                <tbody>
+                <tr th:each="s : ${splits}">
+                    <td th:text="${#temporals.format(s.date, 'dd/MM/yyyy')}"></td>
+                    <td><strong th:text="${s.ticker}"></strong></td>
+                    <td class="text-end" th:text="${s.ratio.stripTrailingZeros().toPlainString()}"></td>
+                    <td class="text-end">
+                        <div class="d-flex gap-1 justify-content-end">
+                            <a th:href="@{/splits/{id}/edit(id=${s.id})}"
+                               class="btn btn-outline-secondary btn-sm">
+                                <i class="bi bi-pencil"></i>
+                            </a>
+                            <form th:action="@{/splits/{id}/delete(id=${s.id})}" method="post"
+                                  onsubmit="return confirm('¿Eliminar este split?');">
+                                <button type="submit" class="btn btn-outline-danger btn-sm">
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                            </form>
+                        </div>
+                    </td>
+                </tr>
+                <tr th:if="${#lists.isEmpty(splits)}">
+                    <td colspan="4" class="text-center text-muted py-3">
+                        No hay splits registrados. <a href="/splits/new">Registra el primero</a>.
+                    </td>
+                </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<div th:replace="~{fragments/layout :: scripts}"></div>
+</body>
+</html>
