@@ -58,7 +58,8 @@
                     <th data-sort="text">ISIN <span class="sort-icon text-secondary ms-1">⇅</span></th>
                     <th class="text-end" data-sort="num">Cantidad <span class="sort-icon text-secondary ms-1">⇅</span></th>
                     <th class="text-end" data-sort="num">Coste total (€) <span class="sort-icon text-secondary ms-1">⇅</span></th>
-                    <th class="text-end" data-sort="num">% cartera <span class="sort-icon text-secondary ms-1">⇅</span></th>
+                    <th class="text-end" data-sort="num">% coste <span class="sort-icon text-secondary ms-1">⇅</span></th>
+                    <th class="text-end" data-sort="num">% valor <span class="sort-icon text-secondary ms-1">⇅</span></th>
                     <th class="text-end" data-sort="num">Precio medio (€) <span class="sort-icon text-secondary ms-1">⇅</span></th>
                     <th class="text-end" data-sort="num">Precio actual (€) <span class="sort-icon text-secondary ms-1">⇅</span></th>
                     <th class="text-end" data-sort="num">± vs precio medio <span class="sort-icon text-secondary ms-1">⇅</span></th>
@@ -73,6 +74,7 @@
                     <td class="text-end" th:text="${#numbers.formatDecimal(item.totalQty(), 1, 4)}"></td>
                     <td class="text-end" th:text="${#numbers.formatDecimal(item.totalCost(), 1, 2)}"></td>
                     <td class="text-end" th:text="${#numbers.formatDecimal(portfolioPercent[item.ticker()], 1, 2) + ' %'}"></td>
+                    <td class="text-end text-muted small cell-pct-value">…</td>
                     <td class="text-end" th:text="${#numbers.formatDecimal(item.avgCost(), 1, 2)}"></td>
                     <td class="text-end text-muted small cell-price">…</td>
                     <td class="text-end text-muted small cell-pct">…</td>
@@ -211,18 +213,21 @@
         cells.forEach(c => { c.textContent = '—'; c.classList.add('text-muted'); });
     }
 
-    rows.forEach(async row => {
+    const rowCurrentValue = new Map();
+
+    const rowPromises = Array.from(rows).map(async row => {
         const isin      = row.dataset.isin;
         const qty       = parseFloat(row.dataset.qty);
         const totalCost = parseFloat(row.dataset.cost);
         const avgCost   = parseFloat(row.dataset.avg);
-        const cellPrice  = row.querySelector('.cell-price');
-        const cellPct    = row.querySelector('.cell-pct');
-        const cellLatent = row.querySelector('.cell-latent');
+        const cellPrice    = row.querySelector('.cell-price');
+        const cellPct      = row.querySelector('.cell-pct');
+        const cellLatent   = row.querySelector('.cell-latent');
+        const cellPctValue = row.querySelector('.cell-pct-value');
 
         try {
             const resp = await fetch(`/api/quote?isin=${encodeURIComponent(isin)}`);
-            if (!resp.ok) { setDash(cellPrice, cellPct, cellLatent); return; }
+            if (!resp.ok) { setDash(cellPrice, cellPct, cellLatent, cellPctValue); return; }
 
             const q     = await resp.json();
             const price = q.price;
@@ -241,14 +246,28 @@
                 cellLatent.textContent = (euros >= 0 ? '+' : '') + euros.toFixed(2) + ' €';
                 color(cellLatent, euros);
                 updateLatentTotal(euros);
+
+                rowCurrentValue.set(row, qty * price);
             } else {
                 cellPrice.textContent = price.toFixed(2) + ' ' + q.originalCurrency;
                 color(cellPrice, 0);
-                setDash(cellPct, cellLatent);
+                setDash(cellPct, cellLatent, cellPctValue);
             }
         } catch {
-            setDash(cellPrice, cellPct, cellLatent);
+            setDash(cellPrice, cellPct, cellLatent, cellPctValue);
         }
+    });
+
+    Promise.all(rowPromises).then(() => {
+        let totalValue = 0;
+        rowCurrentValue.forEach(v => { totalValue += v; });
+        if (totalValue <= 0) return;
+        rowCurrentValue.forEach((value, row) => {
+            const cell = row.querySelector('.cell-pct-value');
+            const pct  = value / totalValue * 100;
+            cell.textContent = pct.toFixed(2) + ' %';
+            cell.classList.remove('text-muted', 'small');
+        });
     });
 </script>
 </body>
