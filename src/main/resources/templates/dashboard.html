@@ -68,7 +68,7 @@
                 </thead>
                 <tbody>
                 <tr th:each="item : ${portfolio}"
-                    th:attr="data-isin=${item.assetName()},data-qty=${item.totalQty()},data-cost=${item.totalCost()},data-avg=${item.avgCost()}">
+                    th:attr="data-isin=${item.assetName()},data-qty=${item.totalQty()},data-cost=${item.totalCost()},data-avg=${item.avgCost()},data-pct-cost=${portfolioPercent[item.ticker()]}">
                     <td><strong th:text="${item.ticker()}"></strong></td>
                     <td th:text="${item.assetName()}"></td>
                     <td class="text-end" th:text="${#numbers.formatDecimal(item.totalQty(), 1, 4)}"></td>
@@ -263,10 +263,12 @@
         rowCurrentValue.forEach(v => { totalValue += v; });
         if (totalValue <= 0) return;
         rowCurrentValue.forEach((value, row) => {
-            const cell = row.querySelector('.cell-pct-value');
-            const pct  = value / totalValue * 100;
+            const cell    = row.querySelector('.cell-pct-value');
+            const pct     = value / totalValue * 100;
+            const pctCost = parseFloat(row.dataset.pctCost);
             cell.textContent = pct.toFixed(2) + ' %';
-            cell.classList.remove('text-muted', 'small');
+            cell.classList.remove('small');
+            color(cell, pct - pctCost);
         });
     });
 </script>
