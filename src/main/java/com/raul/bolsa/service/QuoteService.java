@@ -25,7 +25,9 @@ public class QuoteService {
 
     /** ISINs no estándar que Yahoo Finance no reconoce → símbolo preferido en EUR, fallback en USD */
     private static final Map<String, String[]> ISIN_SYMBOL_OVERRIDE = Map.of(
-            "XF000BTC0017", new String[]{"BTC-EUR", "BTC-USD"}
+            "XF000BTC0017", new String[]{"BTC-EUR", "BTC-USD"},
+            "US02079K3059", new String[]{"GOOGL"},                       // Alphabet Class A
+            "IE00B4ND3602", new String[]{"EGLN.L", "PPFB.SG", "IGLN.L"}  // iShares Physical Gold ETC: EUR (LSE/Stuttgart), fallback USD
     );
 
     private final RestTemplate rest;

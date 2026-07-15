@@ -4,6 +4,17 @@
 <body>
 <nav th:replace="~{fragments/layout :: navbar}"></nav>
 
+<style>
+    #treemap .treemap-cell {
+        position: absolute; overflow: hidden; box-sizing: border-box;
+        border: 2px solid #fff; padding: 4px 6px; color: #fff;
+        display: flex; flex-direction: column; justify-content: flex-start;
+        font-size: .8rem; line-height: 1.15; cursor: default;
+    }
+    #treemap .tm-name { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #treemap .tm-val  { font-size: .72rem; opacity: .92; white-space: nowrap; }
+</style>
+
 <div class="container-fluid px-4">
 
     <!-- Alertas flash -->
@@ -49,6 +60,12 @@
         </div>
     </div>
 
+    <div class="d-flex justify-content-end mb-2" th:unless="${#lists.isEmpty(portfolio)}">
+        <button type="button" id="toggleOptionalCols" class="btn btn-outline-secondary btn-sm">
+            <i class="bi bi-eye me-1"></i>Mostrar precios
+        </button>
+    </div>
+
     <div class="card shadow-sm mb-4" th:unless="${#lists.isEmpty(portfolio)}">
         <div class="table-responsive">
             <table class="table table-hover align-middle mb-0">
@@ -58,10 +75,11 @@
                     <th data-sort="text">ISIN <span class="sort-icon text-secondary ms-1">⇅</span></th>
                     <th class="text-end" data-sort="num">Cantidad <span class="sort-icon text-secondary ms-1">⇅</span></th>
                     <th class="text-end" data-sort="num">Coste total (€) <span class="sort-icon text-secondary ms-1">⇅</span></th>
-                    <th class="text-end" data-sort="num">% coste <span class="sort-icon text-secondary ms-1">⇅</span></th>
-                    <th class="text-end" data-sort="num">% valor <span class="sort-icon text-secondary ms-1">⇅</span></th>
-                    <th class="text-end" data-sort="num">Precio medio (€) <span class="sort-icon text-secondary ms-1">⇅</span></th>
-                    <th class="text-end" data-sort="num">Precio actual (€) <span class="sort-icon text-secondary ms-1">⇅</span></th>
+                    <th class="text-end" data-sort="num">Valor (€) <span class="sort-icon text-secondary ms-1">⇅</span></th>
+                    <th class="text-end" data-sort="num">% cartera <span class="sort-icon text-secondary ms-1">⇅</span></th>
+                    <th class="text-end" data-sort="num">% cartera actual <span class="sort-icon text-secondary ms-1">⇅</span></th>
+                    <th class="text-end col-optional d-none" data-sort="num">Precio medio (€) <span class="sort-icon text-secondary ms-1">⇅</span></th>
+                    <th class="text-end col-optional d-none" data-sort="num">Precio actual (€) <span class="sort-icon text-secondary ms-1">⇅</span></th>
                     <th class="text-end" data-sort="num">± vs precio medio <span class="sort-icon text-secondary ms-1">⇅</span></th>
                     <th class="text-end" data-sort="num">± latente (€) <span class="sort-icon text-secondary ms-1">⇅</span></th>
                 </tr>
@@ -73,15 +91,27 @@
                     <td th:text="${item.assetName()}"></td>
                     <td class="text-end" th:text="${#numbers.formatDecimal(item.totalQty(), 1, 4)}"></td>
                     <td class="text-end" th:text="${#numbers.formatDecimal(item.totalCost(), 1, 2)}"></td>
+                    <td class="text-end text-muted small cell-value">…</td>
                     <td class="text-end" th:text="${#numbers.formatDecimal(portfolioPercent[item.ticker()], 1, 2) + ' %'}"></td>
                     <td class="text-end text-muted small cell-pct-value">…</td>
-                    <td class="text-end" th:text="${#numbers.formatDecimal(item.avgCost(), 1, 2)}"></td>
-                    <td class="text-end text-muted small cell-price">…</td>
+                    <td class="text-end col-optional d-none" th:text="${#numbers.formatDecimal(item.avgCost(), 1, 2)}"></td>
+                    <td class="text-end text-muted small cell-price col-optional d-none">…</td>
                     <td class="text-end text-muted small cell-pct">…</td>
                     <td class="text-end text-muted small cell-latent">…</td>
                 </tr>
                 </tbody>
             </table>
+        </div>
+    </div>
+
+    <div class="card shadow-sm mb-4" th:unless="${#lists.isEmpty(portfolio)}">
+        <div class="card-header">
+            <i class="bi bi-grid-1x2-fill me-2"></i>Distribución actual de la cartera
+        </div>
+        <div class="card-body">
+            <div id="treemap" style="position:relative;width:100%;height:440px;">
+                <div class="text-muted small" id="treemapLoading">Cargando cotizaciones…</div>
+            </div>
         </div>
     </div>
 
@@ -140,6 +170,20 @@
 
 <div th:replace="~{fragments/layout :: scripts}"></div>
 <script>
+    // ── Mostrar/ocultar columnas de precios ───────────────────────────────────
+    (function () {
+        const btn = document.getElementById('toggleOptionalCols');
+        if (!btn) return;
+        btn.addEventListener('click', () => {
+            const cols = document.querySelectorAll('.col-optional');
+            const hidden = cols.length && cols[0].classList.contains('d-none');
+            cols.forEach(c => c.classList.toggle('d-none', !hidden));
+            btn.innerHTML = hidden
+                ? '<i class="bi bi-eye-slash me-1"></i>Ocultar precios'
+                : '<i class="bi bi-eye me-1"></i>Mostrar precios';
+        });
+    })();
+
     // ── Ordenación de la tabla de cartera ─────────────────────────────────────
     (function () {
         const thead  = document.getElementById('portfolioHead');
@@ -224,10 +268,11 @@
         const cellPct      = row.querySelector('.cell-pct');
         const cellLatent   = row.querySelector('.cell-latent');
         const cellPctValue = row.querySelector('.cell-pct-value');
+        const cellValue    = row.querySelector('.cell-value');
 
         try {
             const resp = await fetch(`/api/quote?isin=${encodeURIComponent(isin)}`);
-            if (!resp.ok) { setDash(cellPrice, cellPct, cellLatent, cellPctValue); return; }
+            if (!resp.ok) { setDash(cellPrice, cellPct, cellLatent, cellPctValue, cellValue); return; }
 
             const q     = await resp.json();
             const price = q.price;
@@ -247,16 +292,22 @@
                 color(cellLatent, euros);
                 updateLatentTotal(euros);
 
-                rowCurrentValue.set(row, qty * price);
+                const currentValue = qty * price;
+                cellValue.textContent = currentValue.toFixed(2) + ' €';
+                color(cellValue, currentValue - totalCost);
+
+                rowCurrentValue.set(row, currentValue);
             } else {
                 cellPrice.textContent = price.toFixed(2) + ' ' + q.originalCurrency;
                 color(cellPrice, 0);
-                setDash(cellPct, cellLatent, cellPctValue);
+                setDash(cellPct, cellLatent, cellPctValue, cellValue);
             }
         } catch {
-            setDash(cellPrice, cellPct, cellLatent, cellPctValue);
+            setDash(cellPrice, cellPct, cellLatent, cellPctValue, cellValue);
         }
     });
+
+    let treemapData = [];
 
     Promise.all(rowPromises).then(() => {
         let totalValue = 0;
@@ -269,7 +320,88 @@
             cell.textContent = pct.toFixed(2) + ' %';
             cell.classList.remove('small');
             color(cell, pct - pctCost);
+
+            treemapData.push({
+                name:  row.querySelector('td strong').textContent,
+                full:  row.dataset.isin,
+                value: value,
+                cost:  parseFloat(row.dataset.cost),
+            });
         });
+        renderTreemap();
+    });
+
+    // ── Treemap "squarified" de la distribución actual ────────────────────────
+    const eur0 = new Intl.NumberFormat('es-ES', { maximumFractionDigits: 0 });
+
+    // Algoritmo squarified (Bruls et al.) → lista de rectángulos {x,y,w,h,...}
+    function squarify(items, x, y, w, h) {
+        const rects = [];
+        const total = items.reduce((s, d) => s + d.value, 0);
+        if (total <= 0) return rects;
+        const scale = (w * h) / total;
+        const nodes = items.slice().sort((a, b) => b.value - a.value)
+                           .map(d => ({ ...d, area: d.value * scale }));
+
+        const worst = (row, sum, side) => {
+            if (!row.length) return Infinity;
+            let max = -Infinity, min = Infinity;
+            for (const r of row) { if (r.area > max) max = r.area; if (r.area < min) min = r.area; }
+            const s2 = sum * sum, side2 = side * side;
+            return Math.max((side2 * max) / s2, s2 / (side2 * min));
+        };
+
+        let i = 0;
+        while (i < nodes.length) {
+            const side = Math.min(w, h);
+            const row = [nodes[i]];
+            let sum = nodes[i].area, j = i + 1;
+            while (j < nodes.length &&
+                   worst(row, sum, side) >= worst(row.concat(nodes[j]), sum + nodes[j].area, side)) {
+                row.push(nodes[j]); sum += nodes[j].area; j++;
+            }
+            if (w >= h) {
+                const stripW = sum / h; let yy = y;
+                for (const n of row) { const rh = n.area / stripW; rects.push({ ...n, x, y: yy, w: stripW, h: rh }); yy += rh; }
+                x += stripW; w -= stripW;
+            } else {
+                const stripH = sum / w; let xx = x;
+                for (const n of row) { const rw = n.area / stripH; rects.push({ ...n, x: xx, y, w: rw, h: stripH }); xx += rw; }
+                y += stripH; h -= stripH;
+            }
+            i = j;
+        }
+        return rects;
+    }
+
+    function renderTreemap() {
+        const container = document.getElementById('treemap');
+        if (!container || !treemapData.length) return;
+        const W = container.clientWidth, H = container.clientHeight;
+        if (W === 0 || H === 0) return;
+
+        container.innerHTML = '';
+        const total = treemapData.reduce((s, d) => s + d.value, 0);
+        for (const r of squarify(treemapData, 0, 0, W, H)) {
+            const cell = document.createElement('div');
+            cell.className = 'treemap-cell';
+            cell.style.left = r.x + 'px'; cell.style.top = r.y + 'px';
+            cell.style.width = r.w + 'px'; cell.style.height = r.h + 'px';
+            cell.style.background = (r.value - r.cost) >= 0 ? GREEN : RED;
+            const pct = total > 0 ? (r.value / total * 100) : 0;
+            cell.title = r.name + (r.full ? ' — ' + r.full : '') +
+                         '\n' + r.value.toFixed(2) + ' € (' + pct.toFixed(1) + ' %)';
+            cell.innerHTML =
+                '<div class="tm-name">' + r.name + '</div>' +
+                '<div class="tm-val">' + eur0.format(r.value) + ' €</div>';
+            container.appendChild(cell);
+        }
+    }
+
+    let resizeTimer;
+    window.addEventListener('resize', () => {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(renderTreemap, 150);
     });
 </script>
 </body>
