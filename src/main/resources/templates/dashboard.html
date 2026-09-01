@@ -34,27 +34,25 @@
     </div>
 
     <div th:unless="${#lists.isEmpty(portfolio)}" class="row g-3 mb-3">
-        <div class="col-sm-4">
-            <div class="card text-center shadow-sm">
+        <div class="col-sm-8">
+            <div class="card text-center shadow-sm h-100">
                 <div class="card-body">
-                    <div class="text-muted small">Total invertido</div>
-                    <div class="fs-5 fw-bold" th:text="${#numbers.formatDecimal(totalCost, 1, 2) + ' €'}"></div>
+                    <div class="text-muted small text-uppercase">Global</div>
+                    <div class="fs-4 fw-bold">
+                        <span th:text="${#numbers.formatDecimal(totalCost, 1, 'POINT', 2, 'COMMA') + ' €'}"></span>
+                        <span class="text-muted mx-2">→</span>
+                        <span id="global-value">…</span>
+                    </div>
+                    <div class="small fw-semibold" id="global-delta">…</div>
                 </div>
             </div>
         </div>
         <div class="col-sm-4">
-            <div class="card text-center shadow-sm">
+            <div class="card text-center shadow-sm h-100">
                 <div class="card-body">
-                    <div class="text-muted small">Beneficio latente (€)</div>
-                    <div class="fs-5 fw-bold" id="summary-latent-eur">…</div>
-                </div>
-            </div>
-        </div>
-        <div class="col-sm-4">
-            <div class="card text-center shadow-sm">
-                <div class="card-body">
-                    <div class="text-muted small">Beneficio latente (%)</div>
-                    <div class="fs-5 fw-bold" id="summary-latent-pct">…</div>
+                    <div class="text-muted small text-uppercase">Hoy</div>
+                    <div class="fs-6 fw-bold" id="today-eur">…</div>
+                    <div class="small fw-semibold" id="today-pct">…</div>
                 </div>
             </div>
         </div>
@@ -233,19 +231,45 @@
 
     const rows = document.querySelectorAll('tr[data-isin]');
     const totalCost = [[${totalCost}]];
-    let latentTotal = 0;
-    const summaryEur = document.getElementById('summary-latent-eur');
-    const summaryPct = document.getElementById('summary-latent-pct');
 
-    function updateLatentTotal(euros) {
-        latentTotal += euros;
-        const sign = latentTotal >= 0 ? '+' : '';
-        const c    = latentTotal >= 0 ? GREEN : RED;
-        summaryEur.textContent = sign + latentTotal.toFixed(2) + ' €';
-        summaryEur.style.color = c;
+    let latentTotal = 0;      // plusvalía latente acumulada (€)
+    let dayChange   = 0;      // variación de la última sesión (€)
+    let prevCloseValue = 0;   // valor de la cartera al cierre anterior, solo de las posiciones con cierre conocido
+
+    const globalValue = document.getElementById('global-value');
+    const globalDelta = document.getElementById('global-delta');
+    const todayEur    = document.getElementById('today-eur');
+    const todayPct    = document.getElementById('today-pct');
+
+    // Mismo formato que los importes que pinta Thymeleaf, que quedan justo al lado
+    // useGrouping 'always': es-ES no agruparía los millares de 4 dígitos, pero Thymeleaf sí
+    const eur2 = new Intl.NumberFormat('es-ES',
+        { minimumFractionDigits: 2, maximumFractionDigits: 2, useGrouping: 'always' });
+    const signedEur = n => (n >= 0 ? '+' : '') + eur2.format(n) + ' €';
+    const signedPct = n => (n >= 0 ? '+' : '') + eur2.format(n) + ' %';
+
+    function renderGlobal() {
+        const c = latentTotal >= 0 ? GREEN : RED;
+        globalValue.textContent = eur2.format(totalCost + latentTotal) + ' €';
+        globalValue.style.color = c;
         const pct = totalCost > 0 ? latentTotal / totalCost * 100 : 0;
-        summaryPct.textContent = sign + pct.toFixed(2) + ' %';
-        summaryPct.style.color = c;
+        globalDelta.textContent = '(' + signedEur(latentTotal) + '  ' + signedPct(pct) + ')';
+        globalDelta.style.color = c;
+    }
+
+    function renderToday() {
+        if (prevCloseValue <= 0) {
+            todayEur.textContent = '—';
+            todayPct.textContent = '';
+            todayEur.classList.add('text-muted');
+            return;
+        }
+        const c = dayChange >= 0 ? GREEN : RED;
+        todayEur.textContent = signedEur(dayChange);
+        todayEur.style.color = c;
+        todayEur.classList.remove('text-muted');
+        todayPct.textContent = '(' + signedPct(dayChange / prevCloseValue * 100) + ')';
+        todayPct.style.color = c;
     }
 
     function color(cell, value) {
@@ -290,7 +314,15 @@
                 const euros = qty * (price - avgCost);
                 cellLatent.textContent = (euros >= 0 ? '+' : '') + euros.toFixed(2) + ' €';
                 color(cellLatent, euros);
-                updateLatentTotal(euros);
+                latentTotal += euros;
+                renderGlobal();
+
+                // Variación de la última sesión: solo suman las posiciones cuyo cierre anterior conocemos
+                if (q.previousClose != null) {
+                    prevCloseValue += qty * q.previousClose;
+                    dayChange      += qty * (price - q.previousClose);
+                    renderToday();
+                }
 
                 const currentValue = qty * price;
                 cellValue.textContent = currentValue.toFixed(2) + ' €';
@@ -310,6 +342,10 @@
     let treemapData = [];
 
     Promise.all(rowPromises).then(() => {
+        // Estado final: deja los resúmenes cerrados aunque ninguna cotización se haya resuelto
+        renderGlobal();
+        renderToday();
+
         let totalValue = 0;
         rowCurrentValue.forEach(v => { totalValue += v; });
         if (totalValue <= 0) return;
