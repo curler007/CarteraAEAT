@@ -15,9 +15,14 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.ArrayList;
 import java.util.List;
-import java.util.stream.Collectors;
 
+/**
+ * El FIFO se aplica globalmente por ticker dentro de un mismo usuario: nunca entre usuarios.
+ * Donde el método ya recibe una entidad, el propietario se deriva de ella
+ * ({@code sellOp.getUserId()}) para que no pueda desalinearse.
+ */
 @Service
 @RequiredArgsConstructor
 public class FifoService {
@@ -36,6 +41,7 @@ public class FifoService {
     @Transactional
     public FifoLot createLot(Operation buyOp) {
         FifoLot lot = new FifoLot();
+        lot.setUserId(requireOwner(buyOp));
         lot.setOperation(buyOp);
         lot.setTicker(buyOp.getTicker().toUpperCase());
         lot.setAssetName(buyOp.getAssetName());
@@ -49,13 +55,15 @@ public class FifoService {
     }
 
     /**
-     * Procesa una venta aplicando FIFO global por ticker (independientemente del broker).
+     * Procesa una venta aplicando FIFO global por ticker (independientemente del broker)
+     * dentro de la cartera del propietario de la operación.
      * Crea un SaleRecord por cada lote consumido.
      *
      * @return lista de SaleRecords generados
      */
     @Transactional
     public List<SaleRecord> processSell(Operation sellOp) {
+        Long userId = requireOwner(sellOp);
         String ticker = sellOp.getTicker().toUpperCase();
         BigDecimal qtyToSell = sellOp.getQuantity();
         BigDecimal totalProceeds = sellOp.getTotal(); // ya neto de comisión
@@ -63,19 +71,19 @@ public class FifoService {
         // Si hay alguna venta pendiente anterior, esta también queda pendiente completa:
         // no podemos saltarnos el orden FIFO entre ventas
         boolean blockedByPriorPendingSell = operationRepo
-                .existsByTickerAndTypeAndPendingQtyGreaterThanAndDateBefore(
-                        ticker, OperationType.SELL, ZERO, sellOp.getDate());
+                .existsByUserIdAndTickerAndTypeAndPendingQtyGreaterThanAndDateBefore(
+                        userId, ticker, OperationType.SELL, ZERO, sellOp.getDate());
 
         if (blockedByPriorPendingSell) {
             sellOp.setPendingQty(qtyToSell);
             operationRepo.save(sellOp);
-            return java.util.List.of();
+            return List.of();
         }
 
-        // Solo lotes comprados en fecha <= fecha de venta (FIFO correcto)
+        // Solo lotes propios comprados en fecha <= fecha de venta (FIFO correcto)
         List<FifoLot> lots = fifoLotRepo
-                .findByTickerAndRemainingQtyGreaterThanAndPurchaseDateLessThanEqualOrderByPurchaseDateAscIdAsc(
-                        ticker, ZERO, sellOp.getDate());
+                .findByUserIdAndTickerAndRemainingQtyGreaterThanAndPurchaseDateLessThanEqualOrderByPurchaseDateAscIdAsc(
+                        userId, ticker, ZERO, sellOp.getDate());
 
         BigDecimal totalAvailable = lots.stream()
                 .map(FifoLot::getRemainingQty)
@@ -90,7 +98,7 @@ public class FifoService {
         operationRepo.save(sellOp);
 
         BigDecimal qtyRemaining = qtyCanMatch;
-        List<SaleRecord> records = new java.util.ArrayList<>();
+        List<SaleRecord> records = new ArrayList<>();
 
         for (FifoLot lot : lots) {
             if (qtyRemaining.compareTo(ZERO) == 0) break;
@@ -116,6 +124,7 @@ public class FifoService {
 
             // Crear el SaleRecord
             SaleRecord sr = new SaleRecord();
+            sr.setUserId(userId);
             sr.setSellOperation(sellOp);
             sr.setConsumedLot(lot);
             sr.setTicker(ticker);
@@ -145,6 +154,7 @@ public class FifoService {
      */
     @Transactional
     public void processCanje(Operation canjeOp) {
+        Long userId = requireOwner(canjeOp);
         String ticker = canjeOp.getTicker().toUpperCase();
         BigDecimal canjeQty = canjeOp.getQuantity();
 
@@ -154,11 +164,11 @@ public class FifoService {
 
         // Lotes existentes (excluido el propio lote de canje) con qty > 0 y fecha <= canje
         List<FifoLot> existingLots = fifoLotRepo
-                .findByTickerAndRemainingQtyGreaterThanAndPurchaseDateLessThanEqualOrderByPurchaseDateAscIdAsc(
-                        ticker, ZERO, canjeOp.getDate())
+                .findByUserIdAndTickerAndRemainingQtyGreaterThanAndPurchaseDateLessThanEqualOrderByPurchaseDateAscIdAsc(
+                        userId, ticker, ZERO, canjeOp.getDate())
                 .stream()
                 .filter(l -> !l.getId().equals(canjeLot.getId()))
-                .collect(Collectors.toList());
+                .toList();
 
         BigDecimal existingQty = existingLots.stream()
                 .map(FifoLot::getRemainingQty).reduce(ZERO, BigDecimal::add);
@@ -186,7 +196,7 @@ public class FifoService {
     }
 
     /**
-     * Recalcula el FIFO completo para un ticker dado.
+     * Recalcula el FIFO completo de un ticker para un usuario.
      * Se invoca cuando se detecta una inserción desordenada, al eliminar operaciones
      * o al guardar/eliminar un split.
      *
@@ -201,20 +211,20 @@ public class FifoService {
      *      - SPLIT → multiplica remainingQty de todos los lotes abiertos por el ratio
      */
     @Transactional
-    public void recalculateFifo(String ticker) {
+    public void recalculateFifo(Long userId, String ticker) {
         // 1. Borrar SaleRecords
-        saleRecordRepo.deleteByTicker(ticker);
+        saleRecordRepo.deleteByUserIdAndTicker(userId, ticker);
 
         // 2. Resetear FifoLots (BUY → coste original; CANJE → 0)
-        fifoLotRepo.findByTickerOrderByPurchaseDateAscIdAsc(ticker).forEach(lot -> {
+        fifoLotRepo.findByUserIdAndTickerOrderByPurchaseDateAscIdAsc(userId, ticker).forEach(lot -> {
             lot.setRemainingQty(lot.getInitialQty());
             lot.setRemainingCost(lot.getInitialCost());
             fifoLotRepo.save(lot);
         });
 
         // 3. Reprocesar en orden cronológico, splits antes que operaciones del mismo día
-        List<Split> splits = splitRepo.findByTickerOrderByDateAscIdAsc(ticker);
-        List<Operation> ops = operationRepo.findByTickerOrderByDateAscIdAsc(ticker);
+        List<Split> splits = splitRepo.findByUserIdAndTickerOrderByDateAscIdAsc(userId, ticker);
+        List<Operation> ops = operationRepo.findByUserIdAndTickerOrderByDateAscIdAsc(userId, ticker);
         int si = 0, oi = 0;
 
         while (si < splits.size() || oi < ops.size()) {
@@ -242,7 +252,8 @@ public class FifoService {
      * por el ratio del split. El coste no varía.
      */
     private void applySplitToOpenLots(Split split) {
-        fifoLotRepo.findByTickerOrderByPurchaseDateAscIdAsc(split.getTicker()).stream()
+        fifoLotRepo.findByUserIdAndTickerOrderByPurchaseDateAscIdAsc(
+                        split.getUserId(), split.getTicker()).stream()
                 .filter(lot -> lot.getRemainingQty().compareTo(ZERO) > 0)
                 .forEach(lot -> {
                     lot.setRemainingQty(lot.getRemainingQty()
@@ -256,8 +267,8 @@ public class FifoService {
      * Revierte los SaleRecords de una venta y restaura los lotes consumidos.
      */
     @Transactional
-    public void reverseSell(Long sellOperationId) {
-        List<SaleRecord> records = saleRecordRepo.findBySellOperation_Id(sellOperationId);
+    public void reverseSell(Long userId, Long sellOperationId) {
+        List<SaleRecord> records = saleRecordRepo.findByUserIdAndSellOperation_Id(userId, sellOperationId);
         for (SaleRecord sr : records) {
             FifoLot lot = sr.getConsumedLot();
             lot.setRemainingQty(lot.getRemainingQty().add(sr.getQuantity()));
@@ -265,5 +276,15 @@ public class FifoService {
             fifoLotRepo.save(lot);
             saleRecordRepo.delete(sr);
         }
+    }
+
+    /** Ninguna fila puede quedar sin propietario: sería invisible y rompería el FIFO. */
+    private static Long requireOwner(Operation op) {
+        Long userId = op.getUserId();
+        if (userId == null) {
+            throw new IllegalStateException(
+                    "La operación " + op.getId() + " no tiene propietario asignado");
+        }
+        return userId;
     }
 }

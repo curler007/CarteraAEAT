@@ -3,21 +3,23 @@ package com.raul.bolsa.repository;
 import com.raul.bolsa.domain.SaleRecord;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+import java.time.LocalDate;
 import java.util.List;
 
 public interface SaleRecordRepository extends JpaRepository<SaleRecord, Long> {
 
-    List<SaleRecord> findByTaxYearOrderBySaleDateAscTickerAsc(int taxYear);
+    List<SaleRecord> findByUserIdAndTaxYearOrderBySaleDateAscTickerAsc(Long userId, int taxYear);
 
-    List<SaleRecord> findAllByOrderBySaleDateDescIdDesc();
+    List<SaleRecord> findByUserId(Long userId);
 
-    boolean existsBySellOperation_Id(Long operationId);
+    List<SaleRecord> findByUserIdAndSellOperation_Id(Long userId, Long operationId);
 
-    boolean existsByConsumedLot_Operation_Id(Long operationId);
+    boolean existsByUserIdAndConsumedLot_Operation_Id(Long userId, Long operationId);
 
-    List<SaleRecord> findBySellOperation_Id(Long operationId);
+    boolean existsByUserIdAndTickerAndSaleDateGreaterThanEqual(
+            Long userId, String ticker, LocalDate date);
 
-    boolean existsByTickerAndSaleDateGreaterThanEqual(String ticker, java.time.LocalDate date);
+    void deleteByUserIdAndTicker(Long userId, String ticker);
 
-    void deleteByTicker(String ticker);
+    void deleteByUserId(Long userId);
 }

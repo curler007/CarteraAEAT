@@ -2,6 +2,7 @@ package com.raul.bolsa;
 
 import com.raul.bolsa.domain.AeatGroup;
 import com.raul.bolsa.domain.OperationType;
+import com.raul.bolsa.repository.AppUserRepository;
 import com.raul.bolsa.service.OperationService;
 import com.raul.bolsa.service.SplitService;
 import com.raul.bolsa.web.dto.OperationForm;
@@ -50,13 +51,15 @@ class FixtureGenerator {
         registry.add("app.security.password", () -> "test");
     }
 
+    @Autowired AppUserRepository userRepo;
     @Autowired OperationService operationService;
     @Autowired SplitService splitService;
 
     @Test
     void generate() {
-        OPS.forEach(o -> operationService.save(o.toForm()));
-        SPLITS.forEach(s -> splitService.save(s.toForm()));
+        Long uid = TestUsers.create(userRepo, "fixture").getId();
+        OPS.forEach(o -> operationService.save(uid, o.toForm()));
+        SPLITS.forEach(s -> splitService.save(uid, s.toForm()));
     }
 
     // ─── Datos sintéticos ────────────────────────────────────────────────────

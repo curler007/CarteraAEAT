@@ -12,7 +12,8 @@ import java.time.LocalDate;
  * El FIFO se aplica globalmente por ticker (no por broker), que es lo que exige Hacienda.
  */
 @Entity
-@Table(name = "fifo_lots")
+@Table(name = "fifo_lots",
+       indexes = @Index(name = "idx_fifo_lots_user_ticker", columnList = "user_id, ticker"))
 @Getter
 @Setter
 public class FifoLot {
@@ -20,6 +21,14 @@ public class FifoLot {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    /**
+     * Propietario de la fila. Nullable a nivel de DDL porque SQLite no admite
+     * ALTER TABLE ADD COLUMN NOT NULL sin default sobre una tabla con datos;
+     * en codigo se asigna siempre y LegacyDataMigration adopta las filas antiguas.
+     */
+    @Column(name = "user_id")
+    private Long userId;
 
     @ManyToOne(optional = false)
     @JoinColumn(name = "operation_id")

@@ -1,5 +1,6 @@
 <!DOCTYPE html>
-<html xmlns:th="http://www.thymeleaf.org">
+<html xmlns:th="http://www.thymeleaf.org"
+      xmlns:sec="http://www.thymeleaf.org/extras/spring-security">
 
 <!-- ═══ HEAD ═══ -->
 <head th:fragment="head(title)">
@@ -45,6 +46,9 @@
                 <li class="nav-item">
                     <a class="nav-link" href="/splits"><i class="bi bi-scissors me-1"></i>Splits</a>
                 </li>
+                <li class="nav-item" sec:authorize="hasRole('ADMIN')">
+                    <a class="nav-link" href="/admin/users"><i class="bi bi-people me-1"></i>Usuarios</a>
+                </li>
             </ul>
             <div class="d-flex gap-2 align-items-center">
                 <a class="btn btn-outline-light btn-sm" href="/splits/new">
@@ -53,6 +57,8 @@
                 <a class="btn btn-success btn-sm" href="/operations/new">
                     <i class="bi bi-plus-lg me-1"></i>Nueva operación
                 </a>
+                <span class="navbar-text small text-light-emphasis d-none d-lg-inline"
+                      sec:authentication="name">usuario</span>
                 <form th:action="@{/logout}" method="post" class="mb-0">
                     <input type="hidden" th:name="${_csrf.parameterName}" th:value="${_csrf.token}"/>
                     <button type="submit" class="btn btn-outline-danger btn-sm">

@@ -8,7 +8,8 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 
 @Entity
-@Table(name = "operations")
+@Table(name = "operations",
+       indexes = @Index(name = "idx_operations_user_ticker", columnList = "user_id, ticker"))
 @Getter
 @Setter
 public class Operation {
@@ -16,6 +17,14 @@ public class Operation {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    /**
+     * Propietario de la fila. Nullable a nivel de DDL porque SQLite no admite
+     * ALTER TABLE ADD COLUMN NOT NULL sin default sobre una tabla con datos;
+     * en codigo se asigna siempre y LegacyDataMigration adopta las filas antiguas.
+     */
+    @Column(name = "user_id")
+    private Long userId;
 
     @Column(nullable = false)
     private LocalDate date;

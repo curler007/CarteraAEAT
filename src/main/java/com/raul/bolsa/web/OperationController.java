@@ -45,6 +45,7 @@ public class OperationController {
     private final SplitRepository splitRepo;
     private final OperationService operationService;
     private final com.raul.bolsa.service.SplitService splitService;
+    private final com.raul.bolsa.security.CurrentUser currentUser;
 
     @GetMapping("/")
     public String root() {
@@ -53,7 +54,8 @@ public class OperationController {
 
     @GetMapping("/dashboard")
     public String dashboard(Model model) {
-        List<com.raul.bolsa.web.dto.PortfolioItem> portfolio = fifoLotRepo.findPortfolioSummary();
+        Long uid = currentUser.id();
+        List<com.raul.bolsa.web.dto.PortfolioItem> portfolio = fifoLotRepo.findPortfolioSummary(uid);
 
         BigDecimal totalCost = portfolio.stream()
                 .map(com.raul.bolsa.web.dto.PortfolioItem::totalCost)
@@ -70,7 +72,7 @@ public class OperationController {
                 ));
 
         // Ventas agrupadas por año y ticker para el resumen del dashboard
-        List<SaleYearSummary> salesByYear = saleRecordRepo.findAll().stream()
+        List<SaleYearSummary> salesByYear = saleRecordRepo.findByUserId(uid).stream()
                 .collect(Collectors.groupingBy(
                         SaleRecord::getTaxYear,
                         TreeMap::new,
@@ -129,13 +131,14 @@ public class OperationController {
 
     @GetMapping("/operations")
     public String list(Model model) {
-        List<Operation> operations = operationRepo.findAllByOrderByDateDescIdDesc();
+        Long uid = currentUser.id();
+        List<Operation> operations = operationRepo.findAllByUserIdOrderByDateDescIdDesc(uid);
 
         // CSS class por operationId para sombrear compras según consumo del lote:
         //   verde  → totalmente consumida (remainingQty == 0)
         //   amarillo → parcialmente consumida (0 < remaining < initial)
         //   vacío  → sin consumir
-        List<com.raul.bolsa.domain.FifoLot> allLots = fifoLotRepo.findAll();
+        List<com.raul.bolsa.domain.FifoLot> allLots = fifoLotRepo.findByUserId(uid);
 
         Map<Long, String> lotRowClass = allLots.stream()
                 .collect(Collectors.toMap(
@@ -169,7 +172,7 @@ public class OperationController {
         model.addAttribute("lotRemainingCost", lotRemainingCost);
 
         // Cargar splits una sola vez y agrupar por ticker (reutilizado en running balance e history)
-        List<com.raul.bolsa.domain.Split> allSplits = splitRepo.findAll();
+        List<com.raul.bolsa.domain.Split> allSplits = splitRepo.findByUserId(uid);
         Map<String, List<com.raul.bolsa.domain.Split>> splitsByTicker = allSplits.stream()
                 .collect(Collectors.groupingBy(s -> s.getTicker().toUpperCase()));
 
@@ -199,7 +202,7 @@ public class OperationController {
         model.addAttribute("runningBalance", runningBalance);
 
         // Tooltip para ventas: mapa sellOpId → HTML con los lotes consumidos
-        Map<Long, String> sellTooltip = saleRecordRepo.findAll().stream()
+        Map<Long, String> sellTooltip = saleRecordRepo.findByUserId(uid).stream()
                 .collect(Collectors.groupingBy(sr -> sr.getSellOperation().getId()))
                 .entrySet().stream()
                 .collect(Collectors.toMap(
@@ -251,7 +254,7 @@ public class OperationController {
             return "operations/form";
         }
         try {
-            operationService.save(form);
+            operationService.save(currentUser.id(), form);
             flash.addFlashAttribute("success", "Operación registrada correctamente.");
         } catch (IllegalStateException e) {
             model.addAttribute("error", e.getMessage());
@@ -263,7 +266,7 @@ public class OperationController {
 
     @GetMapping("/operations/{id}/edit")
     public String editForm(@PathVariable Long id, Model model) {
-        Operation op = operationRepo.findById(id)
+        Operation op = operationRepo.findByIdAndUserId(id, currentUser.id())
                 .orElseThrow(() -> new IllegalArgumentException("Operación no encontrada: " + id));
         model.addAttribute("form", toForm(op));
         model.addAttribute("editId", id);
@@ -287,7 +290,7 @@ public class OperationController {
             return "operations/form";
         }
         try {
-            operationService.update(id, form);
+            operationService.update(currentUser.id(), id, form);
             flash.addFlashAttribute("success", "Operación actualizada correctamente.");
         } catch (IllegalStateException e) {
             model.addAttribute("editId", id);
@@ -301,7 +304,7 @@ public class OperationController {
     @PostMapping("/operations/{id}/delete")
     public String delete(@PathVariable Long id, RedirectAttributes flash) {
         try {
-            operationService.delete(id);
+            operationService.delete(currentUser.id(), id);
             flash.addFlashAttribute("success", "Operación eliminada.");
         } catch (IllegalStateException e) {
             flash.addFlashAttribute("error", e.getMessage());
@@ -316,7 +319,7 @@ public class OperationController {
     @GetMapping("/operations/ticker-names")
     @ResponseBody
     public Map<String, TickerInfo> tickerNames() {
-        return operationRepo.findAll().stream()
+        return operationRepo.findByUserId(currentUser.id()).stream()
                 .collect(Collectors.toMap(
                         op -> op.getTicker().toUpperCase(),
                         op -> new TickerInfo(op.getAssetName(), op.getAeatGroup().name()),

@@ -4,6 +4,7 @@ import com.raul.bolsa.domain.AeatGroup;
 import com.raul.bolsa.domain.FifoLot;
 import com.raul.bolsa.domain.OperationType;
 import com.raul.bolsa.domain.SaleRecord;
+import com.raul.bolsa.repository.AppUserRepository;
 import com.raul.bolsa.repository.FifoLotRepository;
 import com.raul.bolsa.repository.SaleRecordRepository;
 import com.raul.bolsa.service.OperationService;
@@ -82,6 +83,7 @@ class ReplayConsistencyTest {
         }
     }
 
+    @Autowired AppUserRepository userRepo;
     @Autowired OperationService operationService;
     @Autowired SplitService splitService;
     @Autowired FifoLotRepository fifoLotRepo;
@@ -89,6 +91,8 @@ class ReplayConsistencyTest {
 
     @Test
     void replayProducesSameFifoState() throws Exception {
+        Long uid = TestUsers.create(userRepo, "replay").getId();
+
         List<OpRow> ops;
         List<SplitRow> splits;
         List<LotSig> expectedLots;
@@ -104,17 +108,17 @@ class ReplayConsistencyTest {
         Collections.shuffle(shuffled, new Random(SHUFFLE_SEED));
 
         for (OpRow op : shuffled) {
-            operationService.save(op.toForm());
+            operationService.save(uid, op.toForm());
         }
         splits.stream()
                 .sorted(Comparator.comparing(SplitRow::date).thenComparingLong(SplitRow::id))
-                .forEach(s -> splitService.save(s.toForm()));
+                .forEach(s -> splitService.save(uid, s.toForm()));
 
-        List<LotSig> actualLots = fifoLotRepo.findAll().stream()
+        List<LotSig> actualLots = fifoLotRepo.findByUserId(uid).stream()
                 .map(LotSig::of)
                 .sorted(LotSig.ORDER)
                 .toList();
-        List<SaleSig> actualSales = saleRecordRepo.findAll().stream()
+        List<SaleSig> actualSales = saleRecordRepo.findByUserId(uid).stream()
                 .map(SaleSig::of)
                 .sorted(SaleSig.ORDER)
                 .toList();

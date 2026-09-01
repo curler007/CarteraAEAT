@@ -13,6 +13,10 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 
+/**
+ * El {@code userId} llega como parámetro explícito, no desde el SecurityContext:
+ * así el servicio es utilizable desde tests que conducen a varios usuarios.
+ */
 @Service
 @RequiredArgsConstructor
 public class OperationService {
@@ -23,27 +27,27 @@ public class OperationService {
     private final FifoService fifoService;
 
     @Transactional
-    public Operation save(OperationForm form) {
-        Operation op = buildOperation(form);
+    public Operation save(Long userId, OperationForm form) {
+        Operation op = buildOperation(userId, form);
 
         // Recalcular si: hay ventas con SaleRecords de fecha >= nueva op, O hay ventas pendientes
-        boolean needsRecalc = saleRecordRepo.existsByTickerAndSaleDateGreaterThanEqual(
-                op.getTicker(), op.getDate())
-                || operationRepo.existsByTickerAndTypeAndPendingQtyGreaterThan(
-                        op.getTicker(), OperationType.SELL, BigDecimal.ZERO);
+        boolean needsRecalc = saleRecordRepo.existsByUserIdAndTickerAndSaleDateGreaterThanEqual(
+                userId, op.getTicker(), op.getDate())
+                || operationRepo.existsByUserIdAndTickerAndTypeAndPendingQtyGreaterThan(
+                        userId, op.getTicker(), OperationType.SELL, BigDecimal.ZERO);
 
         if (op.getType() != OperationType.SELL) {
             operationRepo.save(op);
             fifoService.createLot(op);
             if (needsRecalc) {
-                fifoService.recalculateFifo(op.getTicker());
+                fifoService.recalculateFifo(userId, op.getTicker());
             } else if (op.getType() == OperationType.CANJE) {
                 fifoService.processCanje(op);
             }
         } else {
             operationRepo.save(op);
             if (needsRecalc) {
-                fifoService.recalculateFifo(op.getTicker());
+                fifoService.recalculateFifo(userId, op.getTicker());
             } else {
                 fifoService.processSell(op);
             }
@@ -58,15 +62,14 @@ public class OperationService {
      * independientemente de fechas o cambios de tipo.
      */
     @Transactional
-    public Operation update(Long id, OperationForm form) {
-        Operation existing = operationRepo.findById(id)
-                .orElseThrow(() -> new IllegalArgumentException("Operación no encontrada: " + id));
+    public Operation update(Long userId, Long id, OperationForm form) {
+        Operation existing = requireOwned(userId, id);
         String oldTicker = existing.getTicker();
         String newTicker = form.getTicker().trim().toUpperCase();
 
         // 1. Resetear FIFO del ticker antiguo: borrar SaleRecords y restaurar lots
-        saleRecordRepo.deleteByTicker(oldTicker);
-        fifoLotRepo.findByTickerOrderByPurchaseDateAscIdAsc(oldTicker).forEach(lot -> {
+        saleRecordRepo.deleteByUserIdAndTicker(userId, oldTicker);
+        fifoLotRepo.findByUserIdAndTickerOrderByPurchaseDateAscIdAsc(userId, oldTicker).forEach(lot -> {
             lot.setRemainingQty(lot.getInitialQty());
             lot.setRemainingCost(lot.getInitialCost());
             fifoLotRepo.save(lot);
@@ -74,27 +77,25 @@ public class OperationService {
 
         // 2. Eliminar el lot de esta operación si era compra o canje
         if (existing.getType() != OperationType.SELL) {
-            fifoLotRepo.findByTickerOrderByPurchaseDateAscIdAsc(oldTicker).stream()
-                    .filter(l -> l.getOperation().getId().equals(id))
-                    .forEach(fifoLotRepo::delete);
+            fifoLotRepo.findByOperation_Id(id).ifPresent(fifoLotRepo::delete);
         }
 
         // 3. Eliminar la operación antigua
         operationRepo.delete(existing);
 
         // 4. Guardar la nueva operación y crear su lot si es compra o canje
-        Operation op = buildOperation(form);
+        Operation op = buildOperation(userId, form);
         operationRepo.save(op);
         if (op.getType() != OperationType.SELL) {
             fifoService.createLot(op);
         }
 
         // 5. Recalcular FIFO para el ticker nuevo (reprocesa todas las ventas en orden)
-        fifoService.recalculateFifo(newTicker);
+        fifoService.recalculateFifo(userId, newTicker);
 
         // 6. Si el ticker cambió, recalcular también el antiguo
         if (!oldTicker.equals(newTicker)) {
-            fifoService.recalculateFifo(oldTicker);
+            fifoService.recalculateFifo(userId, oldTicker);
         }
 
         return op;
@@ -106,32 +107,39 @@ public class OperationService {
      * Para ventas: revierte los SaleRecords y restaura los lotes.
      */
     @Transactional
-    public void delete(Long id) {
-        Operation op = operationRepo.findById(id)
-                .orElseThrow(() -> new IllegalArgumentException("Operación no encontrada: " + id));
+    public void delete(Long userId, Long id) {
+        Operation op = requireOwned(userId, id);
 
         if (op.getType() != OperationType.SELL) {
             // Verificar que no haya ventas que dependan de este lote
-            if (saleRecordRepo.existsByConsumedLot_Operation_Id(id)) {
+            if (saleRecordRepo.existsByUserIdAndConsumedLot_Operation_Id(userId, id)) {
                 throw new IllegalStateException(
                         "No se puede eliminar esta operación porque hay ventas registradas que consumen este lote.");
             }
-            fifoLotRepo.findAll().stream()
-                    .filter(l -> l.getOperation().getId().equals(id))
-                    .forEach(fifoLotRepo::delete);
+            fifoLotRepo.findByOperation_Id(id).ifPresent(fifoLotRepo::delete);
             operationRepo.delete(op);
             // Para CANJE: la redistribución de costes queda revertida al recalcular
             if (op.getType() == OperationType.CANJE) {
-                fifoService.recalculateFifo(op.getTicker().toUpperCase());
+                fifoService.recalculateFifo(userId, op.getTicker().toUpperCase());
             }
         } else {
-            fifoService.reverseSell(id);
+            fifoService.reverseSell(userId, id);
             operationRepo.delete(op);
         }
     }
 
-    private Operation buildOperation(OperationForm form) {
+    /**
+     * Carga la operación comprobando el propietario. Para un usuario ajeno el resultado
+     * es indistinguible de que no exista.
+     */
+    private Operation requireOwned(Long userId, Long id) {
+        return operationRepo.findByIdAndUserId(id, userId)
+                .orElseThrow(() -> new IllegalArgumentException("Operación no encontrada: " + id));
+    }
+
+    private Operation buildOperation(Long userId, OperationForm form) {
         Operation op = new Operation();
+        op.setUserId(userId);
         op.setDate(form.getDate());
         op.setBroker(form.getBroker().trim());
         op.setType(form.getType());
