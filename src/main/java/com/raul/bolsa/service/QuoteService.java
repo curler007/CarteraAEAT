@@ -22,7 +22,9 @@ public class QuoteService {
     private static final String SEARCH_URL =
             "https://query2.finance.yahoo.com/v1/finance/search?q=%s&quotesCount=1&newsCount=0";
     private static final String CHART_URL =
-            "https://query1.finance.yahoo.com/v8/finance/chart/%s?interval=1d&range=5d";
+            "https://query1.finance.yahoo.com/v8/finance/chart/%s?%s";
+    /** Query del chart para cotizaciones: la ventana de 5 dias da el cierre de la sesion anterior */
+    private static final String QUOTE_CHART_QUERY = "interval=1d&range=5d";
 
     /** ISINs no estándar que Yahoo Finance no reconoce → símbolo preferido en EUR, fallback en USD */
     private static final Map<String, String[]> ISIN_SYMBOL_OVERRIDE = Map.of(
@@ -64,6 +66,34 @@ public class QuoteService {
         }
     }
 
+    /**
+     * Simbolos de Yahoo candidatos para un ISIN, en orden de preferencia: los del mapeo
+     * manual si lo hay, y si no el que resuelva la busqueda. Vacio si no resuelve ninguno.
+     */
+    public List<String> candidateSymbols(String isin) {
+        if (!looksLikeIsin(isin)) return List.of();
+        String[] override = ISIN_SYMBOL_OVERRIDE.get(isin);
+        if (override != null) return List.of(override);
+        try {
+            String symbol = resolveSymbol(isin);
+            return symbol == null ? List.of() : List.of(symbol);
+        } catch (Exception e) {
+            log.warn("No se pudo resolver el simbolo de {}: {}", isin, e.getMessage());
+            return List.of();
+        }
+    }
+
+    /**
+     * Nodo {@code chart.result[0]} de la API de Yahoo para un simbolo.
+     * {@code query} es la query string ya construida (intervalo, rango, eventos...).
+     */
+    public Optional<JsonNode> fetchChartResult(String symbol, String query) throws Exception {
+        String url = String.format(CHART_URL, symbol, query);
+        String body = rest.exchange(url, HttpMethod.GET, httpEntity(), String.class).getBody();
+        if (body == null) return Optional.empty();
+        return Optional.ofNullable(mapper.readTree(body).path("chart").path("result").get(0));
+    }
+
     private boolean looksLikeIsin(String s) {
         return s != null && s.matches("[A-Z]{2}[A-Z0-9]{10}");
     }
@@ -80,10 +110,7 @@ public class QuoteService {
     }
 
     private Optional<QuoteResult> fetchQuote(String symbol) throws Exception {
-        String url = String.format(CHART_URL, symbol);
-        String body = rest.exchange(url, HttpMethod.GET, httpEntity(), String.class).getBody();
-        if (body == null) return Optional.empty();
-        JsonNode result = mapper.readTree(body).path("chart").path("result").get(0);
+        JsonNode result = fetchChartResult(symbol, QUOTE_CHART_QUERY).orElse(null);
         if (result == null) return Optional.empty();
         JsonNode meta = result.path("meta");
 
@@ -166,11 +193,9 @@ public class QuoteService {
     /** Obtiene el tipo de cambio divisa→EUR más actualizado vía Yahoo Finance (ej: USDEUR=X) */
     private BigDecimal fetchForexRate(String fromCurrency) {
         try {
-            String fxSymbol = fromCurrency + "EUR=X";
-            String url = String.format(CHART_URL, fxSymbol);
-            String body = rest.exchange(url, HttpMethod.GET, httpEntity(), String.class).getBody();
-            if (body == null) return null;
-            JsonNode meta = mapper.readTree(body).path("chart").path("result").get(0).path("meta");
+            JsonNode result = fetchChartResult(fromCurrency + "EUR=X", QUOTE_CHART_QUERY).orElse(null);
+            if (result == null) return null;
+            JsonNode meta = result.path("meta");
             double rate = meta.path("regularMarketPrice").asDouble(0);
             if (rate == 0) rate = meta.path("regularMarketPreviousClose").asDouble(0);
             if (rate == 0) rate = meta.path("chartPreviousClose").asDouble(0);
