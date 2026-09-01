@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="es">
+<head th:replace="~{fragments/layout :: head('Importar operaciones')}"></head>
+<body>
+<nav th:replace="~{fragments/layout :: navbar}"></nav>
+
+<div class="container" style="max-width: 820px;">
+
+    <h4 class="mb-4"><i class="bi bi-upload me-2"></i>Importar operaciones desde CSV</h4>
+
+    <div th:if="${errors}" class="alert alert-danger">
+        <strong class="d-block mb-2">
+            <i class="bi bi-exclamation-triangle me-1"></i>
+            No se ha importado nada. Corrige estos errores y vuelve a intentarlo:
+        </strong>
+        <ul class="mb-0 small">
+            <li th:each="e : ${errors}" th:text="${e}"></li>
+        </ul>
+    </div>
+
+    <!-- ═══ Formato ═══ -->
+    <div class="card shadow-sm mb-4">
+        <div class="card-header bg-light fw-semibold">
+            <i class="bi bi-info-circle me-1"></i>Formato del fichero
+        </div>
+        <div class="card-body">
+            <p class="mb-2">
+                Es exactamente el mismo fichero que genera el botón <strong>Exportar</strong>:
+                puedes exportar, editar en Excel y volver a importar.
+            </p>
+            <p class="mb-2">
+                Texto <strong>UTF-8</strong>, columnas separadas por <code>;</code> y una primera
+                fila de cabecera obligatoria:
+            </p>
+            <pre class="bg-light border rounded p-2 small mb-3" style="overflow-x:auto;"
+                 th:text="${header}"></pre>
+
+            <div class="table-responsive">
+                <table class="table table-sm table-bordered align-middle small mb-3">
+                    <thead class="table-light">
+                    <tr>
+                        <th>Columna</th>
+                        <th>Obligatoria</th>
+                        <th>Descripción</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <tr>
+                        <td><code>Fecha</code></td><td>Sí</td>
+                        <td><code>dd/MM/yyyy</code>, por ejemplo <code>05/08/2025</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>Tipo</code></td><td>Sí</td>
+                        <td><code>BUY</code> (compra), <code>SELL</code> (venta),
+                            <code>CANJE</code> (acciones liberadas) o <code>SPLIT</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>Ticker</code></td><td>Sí</td>
+                        <td>Nombre con el que identificas el valor, p. ej. <code>APPLE</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>ISIN</code></td><td>Sí, salvo SPLIT</td>
+                        <td>ISIN del valor, p. ej. <code>US0378331005</code>. Es lo que se usa para
+                            consultar la cotización.</td>
+                    </tr>
+                    <tr>
+                        <td><code>Broker</code></td><td>Sí, salvo SPLIT</td>
+                        <td>Dónde se ejecutó, p. ej. <code>Trade Republic</code>, <code>ING</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>Cantidad</code></td><td>Sí</td>
+                        <td>Número de acciones, admite decimales. En una fila
+                            <code>SPLIT</code> es el <strong>ratio</strong> (un 1:10 son
+                            <code>10</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>Total</code></td><td>Sí, salvo CANJE y SPLIT</td>
+                        <td>Importe total en €. En compras <em>incluye</em> la comisión;
+                            en ventas ya va <em>neto</em> de comisión.</td>
+                    </tr>
+                    <tr>
+                        <td><code>Comision</code></td><td>No</td>
+                        <td>Comisión en €. Vacío se interpreta como 0.</td>
+                    </tr>
+                    <tr>
+                        <td><code>Grupo AEAT</code></td><td>Sí, salvo SPLIT</td>
+                        <td><code>GROUP_1</code> mercado español, <code>GROUP_2</code> europeo,
+                            <code>GROUP_3</code> extraeuropeo. También vale <code>1</code>,
+                            <code>2</code> o <code>3</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>Notas</code></td><td>No</td>
+                        <td>Texto libre.</td>
+                    </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <p class="small mb-2">
+                Los decimales pueden ir con coma o con punto, pero <strong>sin separador de
+                miles</strong>. Si un texto contiene <code>;</code> o comillas, entrecomíllalo
+                con <code>"</code>.
+            </p>
+            <p class="small mb-3">
+                Los <strong>splits van en el mismo fichero</strong>: son necesarios para
+                reconstruir bien el FIFO de un valor que los haya tenido.
+            </p>
+
+            <a href="/operations/import/ejemplo.csv" class="btn btn-outline-secondary btn-sm">
+                <i class="bi bi-download me-1"></i>Descargar un ejemplo
+            </a>
+        </div>
+    </div>
+
+    <!-- ═══ Subida ═══ -->
+    <div class="card shadow-sm">
+        <div class="card-body">
+            <form th:action="@{/operations/import}" method="post" enctype="multipart/form-data"
+                  id="importForm">
+
+                <div class="mb-4">
+                    <label class="form-label fw-semibold" for="file">Fichero CSV</label>
+                    <input type="file" class="form-control" id="file" name="file"
+                           accept=".csv,text/csv" required/>
+                </div>
+
+                <fieldset class="mb-4">
+                    <legend class="form-label fw-semibold">¿Qué hacemos con lo que ya tienes?</legend>
+
+                    <div class="form-check mb-2">
+                        <input class="form-check-input" type="radio" name="mode" id="modeAdd"
+                               value="ADD" checked/>
+                        <label class="form-check-label" for="modeAdd">
+                            <strong>Añadir</strong> a mis operaciones actuales
+                            <span class="d-block text-muted small">
+                                No borra nada. Si importas dos veces el mismo fichero, las
+                                operaciones quedarán duplicadas.
+                            </span>
+                        </label>
+                    </div>
+
+                    <div class="form-check">
+                        <input class="form-check-input" type="radio" name="mode" id="modeReplace"
+                               value="REPLACE"/>
+                        <label class="form-check-label" for="modeReplace">
+                            <strong>Reemplazar todo</strong> por el contenido del fichero
+                            <span class="d-block text-danger small">
+                                Borra todas tus operaciones, lotes y ventas antes de importar.
+                                No se puede deshacer.
+                            </span>
+                        </label>
+                    </div>
+                </fieldset>
+
+                <div class="d-flex gap-2">
+                    <button type="submit" class="btn btn-success">
+                        <i class="bi bi-upload me-1"></i>Importar
+                    </button>
+                    <a href="/operations" class="btn btn-outline-secondary">Cancelar</a>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <p class="text-muted small mt-3">
+        Tras importar se recalcula el FIFO de todos los valores afectados, así que las ventas
+        y el informe AEAT quedan actualizados automáticamente.
+    </p>
+</div>
+
+<div th:replace="~{fragments/layout :: scripts}"></div>
+<script>
+    // Reemplazar es destructivo: pedir confirmación explícita antes de enviar.
+    document.getElementById('importForm').addEventListener('submit', function (e) {
+        if (!document.getElementById('modeReplace').checked) return;
+        var msg = 'Vas a BORRAR todas tus operaciones, lotes y ventas actuales y ' +
+                  'sustituirlas por el contenido del fichero.\n\n' +
+                  'Esta acción no se puede deshacer. ¿Continuar?';
+        if (!confirm(msg)) e.preventDefault();
+    });
+</script>
+</body>
+</html>

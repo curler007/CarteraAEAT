@@ -29,11 +29,13 @@ import java.util.stream.Collectors;
 public class ReportController {
 
     private final SaleRecordRepository saleRecordRepo;
+    private final com.raul.bolsa.security.CurrentUser currentUser;
 
     @GetMapping("/sales")
     public String sales(@RequestParam(defaultValue = "0") int year, Model model) {
         int selectedYear = year > 0 ? year : LocalDate.now().getYear() - 1;
-        List<SaleRecord> records = saleRecordRepo.findByTaxYearOrderBySaleDateAscTickerAsc(selectedYear);
+        List<SaleRecord> records = saleRecordRepo
+                .findByUserIdAndTaxYearOrderBySaleDateAscTickerAsc(currentUser.id(), selectedYear);
 
         BigDecimal totalCost     = records.stream().map(SaleRecord::getCostBasis).reduce(BigDecimal.ZERO, BigDecimal::add);
         BigDecimal totalProceeds = records.stream().map(SaleRecord::getProceeds).reduce(BigDecimal.ZERO, BigDecimal::add);
@@ -74,7 +76,8 @@ public class ReportController {
 
     @GetMapping("/sales/export.csv")
     public ResponseEntity<byte[]> exportCsv(@RequestParam int year) {
-        List<SaleRecord> records = saleRecordRepo.findByTaxYearOrderBySaleDateAscTickerAsc(year);
+        List<SaleRecord> records = saleRecordRepo
+                .findByUserIdAndTaxYearOrderBySaleDateAscTickerAsc(currentUser.id(), year);
 
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         // BOM UTF-8 para que Excel lo abra bien

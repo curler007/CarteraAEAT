@@ -13,7 +13,8 @@ import java.time.LocalDate;
  * Esto es necesario para la AEAT, que pide la fecha de adquisición de cada lote.
  */
 @Entity
-@Table(name = "sale_records")
+@Table(name = "sale_records",
+       indexes = @Index(name = "idx_sale_records_user_year", columnList = "user_id, tax_year"))
 @Getter
 @Setter
 public class SaleRecord {
@@ -21,6 +22,14 @@ public class SaleRecord {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    /**
+     * Propietario de la fila. Nullable a nivel de DDL porque SQLite no admite
+     * ALTER TABLE ADD COLUMN NOT NULL sin default sobre una tabla con datos;
+     * en codigo se asigna siempre y LegacyDataMigration adopta las filas antiguas.
+     */
+    @Column(name = "user_id")
+    private Long userId;
 
     @ManyToOne(optional = false)
     @JoinColumn(name = "sell_operation_id")

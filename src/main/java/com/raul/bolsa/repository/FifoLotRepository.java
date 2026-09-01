@@ -6,23 +6,29 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 
 public interface FifoLotRepository extends JpaRepository<FifoLot, Long> {
 
     /**
-     * Lotes con cantidad restante > 0 para un ticker, ordenados por fecha de compra ASC (FIFO).
+     * Lotes del usuario con cantidad restante > 0 para un ticker,
+     * ordenados por fecha de compra ASC (FIFO).
      */
-    List<FifoLot> findByTickerAndRemainingQtyGreaterThanAndPurchaseDateLessThanEqualOrderByPurchaseDateAscIdAsc(
-            String ticker, BigDecimal minQty, java.time.LocalDate maxDate);
+    List<FifoLot> findByUserIdAndTickerAndRemainingQtyGreaterThanAndPurchaseDateLessThanEqualOrderByPurchaseDateAscIdAsc(
+            Long userId, String ticker, BigDecimal minQty, LocalDate maxDate);
 
-    List<FifoLot> findByTickerOrderByPurchaseDateAscIdAsc(String ticker);
+    List<FifoLot> findByUserIdAndTickerOrderByPurchaseDateAscIdAsc(Long userId, String ticker);
+
+    List<FifoLot> findByUserId(Long userId);
 
     Optional<FifoLot> findByOperation_Id(Long operationId);
 
+    void deleteByUserId(Long userId);
+
     /**
-     * Resumen de cartera: agrupa lotes activos por ticker.
+     * Resumen de cartera del usuario: agrupa sus lotes activos por ticker.
      */
     @Query("""
             SELECT new com.raul.bolsa.web.dto.PortfolioItem(
@@ -32,9 +38,9 @@ public interface FifoLotRepository extends JpaRepository<FifoLot, Long> {
                 SUM(f.remainingCost)
             )
             FROM FifoLot f
-            WHERE f.remainingQty > 0
+            WHERE f.remainingQty > 0 AND f.userId = :userId
             GROUP BY f.ticker, f.assetName
             ORDER BY SUM(f.remainingCost) DESC
             """)
-    List<PortfolioItem> findPortfolioSummary();
+    List<PortfolioItem> findPortfolioSummary(Long userId);
 }

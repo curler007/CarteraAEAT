@@ -19,11 +19,12 @@ public class SplitController {
 
     private final SplitRepository splitRepo;
     private final SplitService splitService;
+    private final com.raul.bolsa.security.CurrentUser currentUser;
 
     @GetMapping("/splits")
     public String list(Model model) {
-        model.addAttribute("splits",
-                splitRepo.findAll(Sort.by(Sort.Direction.DESC, "date", "id")));
+        model.addAttribute("splits", splitRepo.findByUserId(
+                currentUser.id(), Sort.by(Sort.Direction.DESC, "date", "id")));
         return "splits/list";
     }
 
@@ -38,15 +39,14 @@ public class SplitController {
                        BindingResult result,
                        RedirectAttributes flash) {
         if (result.hasErrors()) return "splits/form";
-        splitService.save(form);
+        splitService.save(currentUser.id(), form);
         flash.addFlashAttribute("success", "Split registrado correctamente.");
         return "redirect:/splits";
     }
 
     @GetMapping("/splits/{id}/edit")
     public String editForm(@PathVariable Long id, Model model) {
-        Split split = splitRepo.findById(id)
-                .orElseThrow(() -> new IllegalArgumentException("Split no encontrado: " + id));
+        Split split = splitService.requireOwned(currentUser.id(), id);
         SplitForm form = new SplitForm();
         form.setDate(split.getDate());
         form.setTicker(split.getTicker());
@@ -66,14 +66,14 @@ public class SplitController {
             model.addAttribute("editId", id);
             return "splits/form";
         }
-        splitService.update(id, form);
+        splitService.update(currentUser.id(), id, form);
         flash.addFlashAttribute("success", "Split actualizado correctamente.");
         return "redirect:/splits";
     }
 
     @PostMapping("/splits/{id}/delete")
     public String delete(@PathVariable Long id, RedirectAttributes flash) {
-        splitService.delete(id);
+        splitService.delete(currentUser.id(), id);
         flash.addFlashAttribute("success", "Split eliminado.");
         return "redirect:/splits";
     }

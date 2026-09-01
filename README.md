@@ -1,6 +1,6 @@
 # Bolsa — Gestión de cartera bursátil con FIFO para AEAT
 
-Aplicación web personal para gestionar una cartera de valores con cálculo FIFO multi-broker y exportación para la declaración de la Renta española (AEAT).
+Aplicación web personal y **multiusuario** para gestionar carteras de valores con cálculo FIFO multi-broker y exportación para la declaración de la Renta española (AEAT).
 
 ---
 
@@ -17,9 +17,11 @@ Aplicación para calcular ganancias/pérdidas patrimoniales por FIFO (global por
 | Backend | Spring Boot 3.3.4, Java 17 |
 | ORM | Spring Data JPA + Hibernate Community Dialects |
 | Base de datos | SQLite (`bolsa.db`, creada automáticamente) |
-| Plantillas | Thymeleaf |
+| Plantillas | Thymeleaf + `thymeleaf-extras-springsecurity6` |
 | UI | Bootstrap 5.3.3 (CDN), Bootstrap Icons |
-| Seguridad | Spring Security (in-memory, BCrypt) |
+| Seguridad | Spring Security (usuarios en BD, BCrypt, roles) |
+| Tests | JUnit 5 + Spring Boot Test (fixture SQLite) |
+| CI | GitHub Actions (`mvn -B test` en push a `master`) |
 | Build | Maven |
 
 ---
@@ -31,16 +33,19 @@ Aplicación para calcular ganancias/pérdidas patrimoniales por FIFO (global por
 - Java 17+
 - Maven 3.8+
 
-### Configurar credenciales
+### Primer arranque: administrador semilla
 
-Antes de la primera ejecución, edita `src/main/resources/application.properties`:
+En el primer arranque, cuando aún no existe ningún usuario en la BD, se crea el administrador
+inicial con las credenciales de `src/main/resources/application.properties`:
 
 ```properties
 app.security.username=admin
-app.security.password=tu_contraseña_segura
+app.security.password=changeme
 ```
 
-> **Importante:** Cambia siempre la contraseña por defecto antes de exponer la app en la red.
+> **Importante:** estos valores **solo se usan la primera vez**. A partir de ahí los usuarios se
+> gestionan desde `/admin/users` y cambiar el fichero no tiene ningún efecto. Cambia la contraseña
+> desde la aplicación antes de exponerla en internet.
 
 ### Ejecutar en modo desarrollo
 
@@ -57,6 +62,40 @@ mvn clean package
 java -jar target/bolsa-1.0.0-SNAPSHOT.jar
 ```
 
+### Tests
+
+```bash
+mvn test
+```
+
+---
+
+## Multiusuario
+
+Cada usuario tiene **su propia cartera**: operaciones, lotes FIFO, ventas y splits llevan `user_id`
+y **todas** las consultas filtran por él. El FIFO de un usuario nunca consume lotes de otro, y una
+venta pendiente de un usuario no bloquea las ventas de nadie más.
+
+#### `AppUser` / `Role`
+
+- `username` (único), `passwordHash` (BCrypt), `enabled`, `role`, `createdAt`
+- Roles: `USER` (su cartera) y `ADMIN` (además, gestión de usuarios en `/admin/users`)
+
+#### Gestión de usuarios (`/admin/users`, solo ADMIN)
+
+- Alta, edición (nombre, rol, activo, cambio de contraseña) y baja
+- Al eliminar un usuario se borran también **todos sus datos**
+- Reglas de seguridad: no puedes eliminarte ni desactivarte a ti mismo, ni degradar/eliminar al
+  último administrador activo
+
+#### Migración desde monousuario (`LegacyDataMigration`)
+
+`ApplicationRunner` idempotente que se ejecuta en cada arranque y normalmente no hace nada:
+
+1. Si no hay usuarios, crea el administrador inicial con las credenciales semilla.
+2. Adopta todas las filas con `user_id IS NULL` (datos de la época monousuario) asignándoselas a
+   ese administrador.
+
 ---
 
 ## Arquitectura
@@ -64,10 +103,10 @@ java -jar target/bolsa-1.0.0-SNAPSHOT.jar
 ### Modelo de dominio
 
 ```
-Operation ─────────── FifoLot
-    │                    │
-    └─── SaleRecord ─────┘
-Split (independiente)
+AppUser ──┬── Operation ─────────── FifoLot
+          │       │                    │
+          │       └─── SaleRecord ─────┘
+          └── Split (independiente)
 ```
 
 #### `Operation`
@@ -76,9 +115,10 @@ Transacción de compra, venta o canje. Campos clave:
 - `ticker`, `assetName` (ISIN), `broker`
 - `quantity` (BigDecimal, hasta 8 decimales — soporta fracciones)
 - `total`: para BUY = (qty × precio) + comisión; para SELL = (qty × precio) − comisión
-- `commission`: incluida en la base de coste (BUY) o deducida de la transmisión (SELL)
+- `commission`: informativa, solo para mostrar el precio unitario
 - `aeatGroup`: `GROUP_1` (mercado español), `GROUP_2` (europeo, por defecto), `GROUP_3` (extraeuropeo)
-- `pendingQty`: cantidad sin emparejar si una VENTA no pudo ser cuberta por lotes previos
+- `pendingQty`: cantidad sin emparejar si una VENTA no pudo ser cubierta por lotes previos
+- `userId`: propietario
 
 #### `FifoLot`
 Lote de compra en espera de ser consumido por ventas futuras. Se crea para cada BUY o CANJE. Registra `remainingQty` y `remainingCost` a medida que se va vendiendo.
@@ -93,11 +133,11 @@ Registro de splits bursátiles: `ticker`, `date`, `ratio` (multiplicador). Un sp
 
 ### FIFO (`FifoService`)
 
-El matching es **global por ticker** (no por broker), tal como exige la normativa española.
+El matching es **global por ticker y por usuario** (no por broker), tal como exige la normativa española.
 
 **`processSell`:**
 1. Bloquea la venta si hay ventas anteriores del mismo ticker con `pendingQty > 0` (preserva el orden FIFO temporal).
-2. Obtiene lotes ordenados por `purchaseDate ASC, id ASC`.
+2. Obtiene los lotes **del usuario** ordenados por `purchaseDate ASC, id ASC`.
 3. Consume lotes proporcionalmente: coste y precio de venta se distribuyen por proporción de acciones.
 4. Crea un `SaleRecord` por cada lote consumido.
 
@@ -105,7 +145,7 @@ El matching es **global por ticker** (no por broker), tal como exige la normativ
 Redistribuye el coste de los lotes existentes al nuevo lote de canje, proporcional a las cantidades (LIRPF Art. 37.1.a). El lote de canje empieza con coste cero; el coste que absorbe proviene de los lotes preexistentes.
 
 **`recalculateFifo`:**
-Recalculo completo para un ticker: borra SaleRecords, resetea los lotes a su estado inicial y reprocesa todas las operaciones y splits en orden cronológico. Se activa cuando se inserta una operación con fecha anterior a ventas existentes, o cuando se modifica/elimina cualquier operación o split.
+Recalculo completo para un ticker de un usuario: borra SaleRecords, resetea los lotes a su estado inicial y reprocesa todas las operaciones y splits en orden cronológico. Se activa cuando se inserta una operación con fecha anterior a ventas existentes, cuando se modifica/elimina cualquier operación o split, y tras una importación CSV.
 
 **`applySplitToOpenLots`:**
 Multiplica `remainingQty` de todos los lotes abiertos por el ratio del split.
@@ -122,7 +162,7 @@ El "Saldo" en la lista de operaciones se muestra ajustado post-splits usando `Sp
 
 ### Recalculo automático (`OperationService`)
 
-Al guardar una operación, si la nueva fecha es **anterior a ventas existentes** del mismo ticker, o si existen ventas pendientes, se borran todos los FifoLots y SaleRecords del ticker y se reconstruyen desde cero en orden cronológico. Esto garantiza la corrección independientemente del orden de inserción.
+Al guardar una operación, si la nueva fecha es **anterior a ventas existentes** del mismo ticker, o si existen ventas pendientes, se borran todos los FifoLots y SaleRecords del ticker (del usuario) y se reconstruyen desde cero en orden cronológico. Esto garantiza la corrección independientemente del orden de inserción.
 
 ---
 
@@ -130,8 +170,15 @@ Al guardar una operación, si la nueva fecha es **anterior a ventas existentes**
 
 - Fuente: Yahoo Finance (sin API key)
 - Entrada: ISIN → búsqueda del símbolo → precio
+- Devuelve `QuoteResult(symbol, price, previousClose, originalCurrency, convertedToEur)`:
+  - `price`: `regularMarketPrice` si existe; si no, el cierre anterior
+  - `previousClose`: cierre de la sesión anterior, tomado de la serie diaria (Yahoo no lo expone
+    fiable en `meta` con `range=5d`) y, como respaldo, derivado de `regularMarketChangePercent`.
+    Es lo que alimenta la sección **Hoy** del dashboard
 - Excepciones: algunos ISINs están mapeados manualmente (ej. Bitcoin)
-- Conversión de divisa: GBp/GBX ÷ 100 → GBP; divisas no EUR → conversión via forex (ej. `USDEUR=X`)
+- Conversión de divisa: GBp/GBX ÷ 100 → GBP; divisas no EUR → conversión via forex (ej. `USDEUR=X`).
+  Precio y cierre anterior se convierten **al cambio de hoy**, para que la variación diaria refleje
+  el movimiento del activo sin mezclarle el de la divisa
 - Timeout: 5s conexión, 10s lectura
 
 ---
@@ -140,9 +187,18 @@ Al guardar una operación, si la nueva fecha es **anterior a ventas existentes**
 
 ### Dashboard (`/dashboard`)
 
-- **Cartera actual**: tabla con posición abierta por ticker — cantidad, coste total, % cartera, coste medio, precio actual, ± vs coste medio, ganancia/pérdida latente (EUR)
+- **Resumen de cartera** en dos tarjetas:
+  - **Global**: total invertido → valor actual (invertido + latente), en verde o rojo, con la
+    ganancia o pérdida en euros y porcentaje
+  - **Hoy**: variación de la última sesión (precio actual vs. cierre anterior) en euros y su
+    porcentaje sobre el valor de la cartera a ese cierre
+- **Cartera actual**: tabla ordenable por posición abierta — nombre, ISIN, cantidad, coste total,
+  valor actual, % cartera (por coste), % cartera actual (por valor), ± vs precio medio y ± latente.
+  Las columnas de precio medio/actual se muestran u ocultan con el botón *Mostrar precios*
+- **Distribución actual de la cartera**: treemap (squarify implementado en JS, sin dependencias)
+  dimensionado por valor actual de cada posición
 - Los precios se cargan en tiempo real al entrar en la página (paralelo por ISIN)
-- **Resumen fiscal por año**: para cada ejercicio con ventas, muestra la ganancia/pérdida total y el desglose por ticker
+- **Resultado por ejercicio fiscal**: para cada ejercicio con ventas, ganancia/pérdida total y desglose por ticker
 
 ### Operaciones (`/operations`)
 
@@ -155,6 +211,33 @@ Al guardar una operación, si la nueva fecha es **anterior a ventas existentes**
   - Venta pendiente → ⏳ con cantidad pendiente
 - **Tooltip en ventas**: lotes consumidos (fecha compra + cantidad)
 - **Saldo por ticker**: balance acumulado post-splits en cada fila
+- Botones de **Exportar** e **Importar** CSV de la cartera
+
+### Exportar / importar la cartera en CSV (`OperationCsvService`)
+
+Copia de seguridad y migración entre cuentas o instalaciones, en un único fichero.
+
+- **Exportar** (`/operations/export.csv`): todas las operaciones **y splits** del usuario en orden
+  cronológico. Los splits van como filas con `Tipo=SPLIT` usando la columna `Cantidad` para el
+  ratio: sin ellos el FIFO de un valor que haya sufrido un split se reconstruiría mal y el error
+  sería silencioso
+- **Importar** (`/operations/import`) en dos modos:
+  - `ADD`: añade las filas a lo que el usuario ya tiene
+  - `REPLACE`: borra operaciones, lotes, ventas y splits del usuario y los reconstruye desde el CSV
+- **Validación previa todo-o-nada**: si alguna fila es inválida no se escribe nada y se indica el
+  número de línea del error. También se avisa si falta la cabecera, en lugar de tragarse la primera fila
+- Tras importar se recalcula el FIFO completo
+- **Fichero de ejemplo**: `/operations/import/ejemplo.csv`
+
+**Formato** — separador `;`, UTF-8 con BOM, fechas `dd/MM/yyyy` (igual que la exportación AEAT).
+Los decimales se escriben con coma (Excel en español), pero al importar se aceptan coma y punto:
+
+```
+Fecha;Tipo;Ticker;ISIN;Broker;Cantidad;Total;Comision;Grupo AEAT;Notas
+05/08/2025;BUY;APPLE;US0378331005;Trade Republic;2,826455;501;1;GROUP_3;
+14/08/2025;SELL;APPLE;US0378331005;Trade Republic;1,5;300,25;1;GROUP_3;venta parcial
+10/06/2024;SPLIT;NVIDIA;;;10;;;;split 1:10
+```
 
 ### Ventas / Informe AEAT (`/sales`)
 
@@ -172,10 +255,11 @@ Al guardar una operación, si la nueva fecha es **anterior a ventas existentes**
 
 ### Seguridad
 
-- Login en `/login` con usuario/contraseña configurables en `application.properties`
-- Todas las rutas requieren autenticación
+- Login en `/login` contra los usuarios de la BD (BCrypt)
+- Todas las rutas requieren autenticación; `/admin/**` requiere rol `ADMIN`
 - CSRF habilitado
 - Logout via POST a `/logout`
+- La navbar oculta el menú *Usuarios* a quien no es administrador (`sec:authorize`)
 
 ---
 
@@ -206,38 +290,54 @@ Se asigna por operación y se propaga a los SaleRecords para el informe fiscal.
 ```
 src/main/java/com/raul/bolsa/
 ├── config/
-│   └── SecurityConfig.java          # Spring Security (in-memory, BCrypt)
+│   ├── LegacyDataMigration.java     # Admin inicial + adopción de filas sin dueño
+│   └── SecurityConfig.java          # Spring Security (BCrypt, /admin/** = ADMIN)
 ├── domain/
 │   ├── AeatGroup.java               # Enum: GROUP_1/2/3
+│   ├── AppUser.java                 # Usuario de la aplicación
 │   ├── FifoLot.java                 # Lote de compra
 │   ├── LocalDateConverter.java      # SQLite date ↔ LocalDate
 │   ├── Operation.java               # Transacción
 │   ├── OperationType.java           # Enum: BUY/SELL/CANJE
+│   ├── Role.java                    # Enum: USER/ADMIN
 │   ├── SaleRecord.java              # Registro de venta por lote
 │   └── Split.java                   # Split bursátil
 ├── repository/
+│   ├── AppUserRepository.java
 │   ├── FifoLotRepository.java
 │   ├── OperationRepository.java
 │   ├── SaleRecordRepository.java
 │   └── SplitRepository.java
+├── security/
+│   ├── AppUserDetailsService.java   # UserDetailsService sobre app_users
+│   ├── AppUserPrincipal.java        # Principal con id y rol
+│   └── CurrentUser.java             # Usuario autenticado (origen del filtrado por dueño)
 ├── service/
+│   ├── AppUserService.java          # CRUD usuarios + reglas de seguridad
 │   ├── FifoService.java             # Lógica FIFO core
+│   ├── OperationCsvService.java     # Export/import CSV de la cartera
 │   ├── OperationService.java        # Orquestación save/update/delete
 │   ├── QuoteService.java            # Cotizaciones Yahoo Finance
 │   └── SplitService.java            # CRUD splits + recalculo FIFO
 └── web/
     ├── dto/
+    │   ├── AppUserForm.java         # Form binding usuarios
+    │   ├── CsvImportResult.java     # Resultado de una importación
     │   ├── HistoryRow.java          # Fila unificada operación|split
+    │   ├── ImportMode.java          # Enum: ADD/REPLACE
     │   ├── OperationForm.java       # Form binding operaciones
     │   ├── PortfolioItem.java       # Fila de cartera en dashboard
     │   ├── QuoteResult.java         # Resultado cotización
     │   ├── SaleYearSummary.java     # Resumen anual ventas
     │   ├── SplitForm.java           # Form binding splits
+    │   ├── TickerInfo.java          # ISIN + grupo AEAT para autocompletar
     │   ├── TickerSaleGroup.java     # Agrupación ventas por ticker
     │   └── TickerYearResult.java    # Resultado anual por ticker
+    ├── AdminUserController.java     # /admin/users
     ├── FormatUtils.java             # @fmt.qty() para Thymeleaf
     ├── LoginController.java
     ├── OperationController.java     # /dashboard, /operations
+    ├── OperationCsvController.java  # /operations/export.csv, /operations/import
     ├── QuoteController.java         # GET /api/quote?isin=
     ├── ReportController.java        # /sales, /sales/export.csv
     └── SplitController.java         # /splits
@@ -247,16 +347,53 @@ src/main/resources/
 └── templates/
     ├── fragments/layout.html        # Navbar, head, scripts
     ├── login.html
-    ├── dashboard.html
+    ├── dashboard.html               # Global/Hoy, tabla cartera, treemap
+    ├── admin/
+    │   ├── form.html
+    │   └── users.html
     ├── operations/
     │   ├── form.html
+    │   ├── import.html
     │   └── list.html
     ├── sales/
     │   └── list.html
     └── splits/
         ├── form.html
         └── list.html
+
+src/test/java/com/raul/bolsa/
+├── CsvRoundTripTest.java            # Export → import reproduce el FIFO
+├── FixtureGenerator.java            # Genera src/test/resources/fixture.db
+├── MultiUserIsolationTest.java      # Aislamiento entre usuarios
+├── ReplayConsistencyTest.java       # Replay = estado FIFO original
+└── TestUsers.java
 ```
+
+---
+
+## Tests
+
+Los tests arrancan el contexto de Spring contra una copia de `src/test/resources/fixture.db`.
+
+**`ReplayConsistencyTest`** — reproduce todas las operaciones y splits del fixture desde cero y
+comprueba que el estado FIFO resultante (lotes y ventas) es idéntico al original. Es la red de
+seguridad para cualquier refactor de `FifoService`.
+
+**`MultiUserIsolationTest`**
+- La venta de un usuario nunca consume lotes de otro, aunque sean más antiguos
+- Una venta pendiente de un usuario no bloquea las ventas de otro
+- Un split solo multiplica los lotes de quien lo registra
+- Un usuario no puede editar ni borrar operaciones de otro
+- Cartera y ventas AEAT solo contienen filas propias, y ninguna fila queda sin dueño
+
+**`CsvRoundTripTest`**
+- Exportar e importar en otra cuenta reproduce el FIFO exactamente
+- Las notas con `;` y comillas sobreviven al viaje
+- `REPLACE` deja la cartera igual que el fichero, sin duplicar; `ADD` acumula sin tocar al otro usuario
+- Un fichero inválido se rechaza entero, indicando la línea; sin cabecera se avisa
+- Se aceptan decimales con punto y con coma
+
+**CI**: `.github/workflows/ci.yml` ejecuta `mvn -B test` en cada push a `master` y en cada tag.
 
 ---
 
@@ -268,10 +405,13 @@ SQLite (`bolsa.db` en el directorio de ejecución). Esquema gestionado automáti
 
 | Tabla | Descripción |
 |---|---|
+| `app_users` | Usuarios, hash BCrypt y rol |
 | `operations` | Todas las compras, ventas y canjes |
 | `fifo_lots` | Lotes activos de compra |
 | `sale_records` | Lotes consumidos por ventas (AEAT) |
 | `splits` | Historial de splits |
+
+Las cuatro últimas llevan `user_id` y **siempre** se consultan filtrando por él.
 
 **Nota técnica:** Hibernate SQLite almacena `LocalDate` como `"yyyy-MM-dd 00:00:00.0"`. El `LocalDateConverter` maneja este formato, ISO `"yyyy-MM-dd"`, y epoch ms (legado).
 
@@ -281,7 +421,7 @@ SQLite (`bolsa.db` en el directorio de ejecución). Esquema gestionado automáti
 
 | Método | URL | Descripción |
 |---|---|---|
-| GET | `/` o `/dashboard` | Dashboard con cartera y resumen fiscal |
+| GET | `/` o `/dashboard` | Dashboard con cartera, treemap y resumen fiscal |
 | GET | `/operations` | Lista de operaciones y splits |
 | GET | `/operations/new` | Formulario nueva operación |
 | POST | `/operations` | Crear operación |
@@ -289,6 +429,10 @@ SQLite (`bolsa.db` en el directorio de ejecución). Esquema gestionado automáti
 | POST | `/operations/{id}/edit` | Actualizar operación |
 | POST | `/operations/{id}/delete` | Eliminar operación |
 | GET | `/operations/ticker-names` | JSON: tickers conocidos (para autocompletar) |
+| GET | `/operations/export.csv` | Descargar la cartera completa (operaciones + splits) |
+| GET | `/operations/import` | Formulario de importación |
+| POST | `/operations/import` | Importar CSV (`mode=ADD` \| `REPLACE`) |
+| GET | `/operations/import/ejemplo.csv` | CSV de ejemplo con el formato exacto |
 | GET | `/sales?year=YYYY` | Informe AEAT ventas |
 | GET | `/sales/export.csv?year=YYYY` | Descargar CSV de ventas del ejercicio |
 | GET | `/splits` | Lista de splits |
@@ -298,6 +442,12 @@ SQLite (`bolsa.db` en el directorio de ejecución). Esquema gestionado automáti
 | POST | `/splits/{id}/edit` | Actualizar split |
 | POST | `/splits/{id}/delete` | Eliminar split |
 | GET | `/api/quote?isin=<ISIN>` | Cotización actual (JSON) |
+| GET | `/admin/users` | Lista de usuarios *(ADMIN)* |
+| GET | `/admin/users/new` | Formulario nuevo usuario *(ADMIN)* |
+| POST | `/admin/users` | Crear usuario *(ADMIN)* |
+| GET | `/admin/users/{id}/edit` | Formulario editar usuario *(ADMIN)* |
+| POST | `/admin/users/{id}/edit` | Actualizar usuario *(ADMIN)* |
+| POST | `/admin/users/{id}/delete` | Eliminar usuario y todos sus datos *(ADMIN)* |
 | GET | `/login` | Página de login |
 | POST | `/logout` | Cerrar sesión |
 
@@ -309,12 +459,16 @@ SQLite (`bolsa.db` en el directorio de ejecución). Esquema gestionado automáti
 # Base de datos
 spring.datasource.url=jdbc:sqlite:bolsa.db
 
-# Seguridad — CAMBIAR antes de poner en producción
+# Semilla del primer administrador — solo se usa si la BD no tiene usuarios
 app.security.username=admin
 app.security.password=changeme
 
 # Puerto
 server.port=8080
+
+# Detrás de un proxy inverso: escuchar solo en local y respetar las cabeceras X-Forwarded-*
+server.address=127.0.0.1
+server.forward-headers-strategy=framework
 ```
 
 ---
@@ -327,6 +481,9 @@ java -jar target/bolsa-1.0.0-SNAPSHOT.jar \
   --app.security.password=contraseña_segura \
   --spring.datasource.url=jdbc:sqlite:/ruta/bolsa/bolsa.db
 ```
+
+Con `server.address=127.0.0.1` la app solo acepta conexiones locales; se expone al exterior a
+través de un proxy inverso (nginx, Caddy…) que termina TLS y reenvía las cabeceras `X-Forwarded-*`.
 
 ---
 
@@ -350,6 +507,16 @@ java -jar target/bolsa-1.0.0-SNAPSHOT.jar \
 1. Ir a **Ventas**, seleccionar el año fiscal
 2. Pulsar **Exportar CSV**
 3. Usar el fichero como referencia para rellenar manualmente el modelo 100
+
+### Copia de seguridad / mover la cartera a otra cuenta
+1. En **Operaciones**, pulsar **Exportar** → se descarga toda la cartera (operaciones y splits)
+2. Entrar con la cuenta destino y en **Operaciones → Importar** subir el fichero
+3. Elegir **Añadir** o **Reemplazar**; el FIFO se recalcula al terminar
+
+### Dar de alta a otro usuario
+1. Como administrador, ir a **Usuarios → Nuevo usuario**
+2. Nombre, contraseña y rol
+3. El nuevo usuario entra con sus credenciales y arranca con una cartera vacía e independiente
 
 ---
 

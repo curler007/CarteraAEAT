@@ -35,46 +35,51 @@ public class SplitService {
                 .reduce(BigDecimal.ONE, BigDecimal::multiply);
     }
 
-    /** Sobrecarga que carga los splits del ticker desde la BD. */
-    public BigDecimal cumulativeFactor(String ticker, LocalDate afterDate, LocalDate upTo) {
+    /** Sobrecarga que carga los splits del ticker para ese usuario desde la BD. */
+    public BigDecimal cumulativeFactor(Long userId, String ticker, LocalDate afterDate, LocalDate upTo) {
         return cumulativeFactor(
-                splitRepo.findByTickerOrderByDateAscIdAsc(ticker.toUpperCase()),
+                splitRepo.findByUserIdAndTickerOrderByDateAscIdAsc(userId, ticker.toUpperCase()),
                 afterDate, upTo);
     }
 
     @Transactional
-    public Split save(SplitForm form) {
+    public Split save(Long userId, SplitForm form) {
         Split split = new Split();
+        split.setUserId(userId);
         split.setTicker(form.getTicker().trim().toUpperCase());
         split.setDate(form.getDate());
         split.setRatio(form.getRatio());
         split = splitRepo.save(split);
-        fifoService.recalculateFifo(split.getTicker());
+        fifoService.recalculateFifo(userId, split.getTicker());
         return split;
     }
 
     @Transactional
-    public Split update(Long id, SplitForm form) {
-        Split split = splitRepo.findById(id)
-                .orElseThrow(() -> new IllegalArgumentException("Split no encontrado: " + id));
+    public Split update(Long userId, Long id, SplitForm form) {
+        Split split = requireOwned(userId, id);
         String oldTicker = split.getTicker();
         split.setTicker(form.getTicker().trim().toUpperCase());
         split.setDate(form.getDate());
         split.setRatio(form.getRatio());
         splitRepo.save(split);
-        fifoService.recalculateFifo(split.getTicker());
+        fifoService.recalculateFifo(userId, split.getTicker());
         if (!oldTicker.equals(split.getTicker())) {
-            fifoService.recalculateFifo(oldTicker);
+            fifoService.recalculateFifo(userId, oldTicker);
         }
         return split;
     }
 
     @Transactional
-    public void delete(Long id) {
-        Split split = splitRepo.findById(id)
-                .orElseThrow(() -> new IllegalArgumentException("Split no encontrado: " + id));
+    public void delete(Long userId, Long id) {
+        Split split = requireOwned(userId, id);
         String ticker = split.getTicker();
         splitRepo.delete(split);
-        fifoService.recalculateFifo(ticker);
+        fifoService.recalculateFifo(userId, ticker);
+    }
+
+    /** Carga el split comprobando el propietario. */
+    public Split requireOwned(Long userId, Long id) {
+        return splitRepo.findByIdAndUserId(id, userId)
+                .orElseThrow(() -> new IllegalArgumentException("Split no encontrado: " + id));
     }
 }

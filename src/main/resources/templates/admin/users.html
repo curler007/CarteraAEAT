@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="es">
+<head th:replace="~{fragments/layout :: head('Usuarios')}"></head>
+<body>
+<nav th:replace="~{fragments/layout :: navbar}"></nav>
+
+<div class="container-fluid px-4">
+
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h4 class="mb-0"><i class="bi bi-people me-2"></i>Usuarios</h4>
+        <a href="/admin/users/new" class="btn btn-success btn-sm">
+            <i class="bi bi-plus-lg me-1"></i>Nuevo usuario
+        </a>
+    </div>
+
+    <div th:if="${success}" class="alert alert-success alert-dismissible fade show">
+        <span th:text="${success}"></span>
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+    <div th:if="${error}" class="alert alert-danger alert-dismissible fade show">
+        <span th:text="${error}"></span>
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+
+    <div class="card shadow-sm">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-dark">
+                <tr>
+                    <th>Usuario</th>
+                    <th>Rol</th>
+                    <th>Estado</th>
+                    <th>Alta</th>
+                    <th></th>
+                </tr>
+                </thead>
+                <tbody>
+                <tr th:each="u : ${users}">
+                    <td>
+                        <strong th:text="${u.username}"></strong>
+                        <span th:if="${u.id == currentUserId}"
+                              class="badge bg-secondary ms-1">tú</span>
+                    </td>
+                    <td>
+                        <span class="badge"
+                              th:classappend="${u.admin} ? 'bg-dark' : 'bg-light text-dark border'"
+                              th:text="${u.role.label}"></span>
+                    </td>
+                    <td>
+                        <span th:if="${u.enabled}" class="text-success">
+                            <i class="bi bi-check-circle me-1"></i>Activo
+                        </span>
+                        <span th:unless="${u.enabled}" class="text-muted">
+                            <i class="bi bi-slash-circle me-1"></i>Desactivado
+                        </span>
+                    </td>
+                    <td th:text="${#temporals.format(u.createdAt, 'dd/MM/yyyy')}"></td>
+                    <td class="text-end">
+                        <div class="d-flex gap-1 justify-content-end">
+                            <a th:href="@{/admin/users/{id}/edit(id=${u.id})}"
+                               class="btn btn-outline-secondary btn-sm">
+                                <i class="bi bi-pencil"></i>
+                            </a>
+                            <!-- El nombre viaja en data-username: Thymeleaf no permite variables
+                                 de tipo String dentro de atributos de evento como onsubmit. -->
+                            <form th:action="@{/admin/users/{id}/delete(id=${u.id})}" method="post"
+                                  th:if="${u.id != currentUserId}"
+                                  class="js-delete-user" th:attr="data-username=${u.username}">
+                                <button type="submit" class="btn btn-outline-danger btn-sm">
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                            </form>
+                        </div>
+                    </td>
+                </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <p class="text-muted small mt-3">
+        Cada usuario tiene su propia cartera: operaciones, lotes FIFO, ventas y splits son
+        independientes y no se comparten entre cuentas.
+    </p>
+</div>
+
+<div th:replace="~{fragments/layout :: scripts}"></div>
+<script>
+    // Confirmación de borrado: es irreversible y arrastra toda la cartera del usuario.
+    document.querySelectorAll('form.js-delete-user').forEach(function (f) {
+        f.addEventListener('submit', function (e) {
+            var msg = 'Se eliminará el usuario ' + f.dataset.username +
+                      ' y TODAS sus operaciones, lotes, ventas y splits.\n\n' +
+                      'Esta acción no se puede deshacer. ¿Continuar?';
+            if (!confirm(msg)) e.preventDefault();
+        });
+    });
+</script>
+</body>
+</html>

@@ -10,6 +10,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -46,7 +47,7 @@ public class QuoteService {
             // ISINs con mapeo manual: probar candidatos en orden hasta obtener precio
             if (ISIN_SYMBOL_OVERRIDE.containsKey(isin)) {
                 for (String candidate : ISIN_SYMBOL_OVERRIDE.get(isin)) {
-                    Optional<QuoteResult> result = fetchPreviousClose(candidate);
+                    Optional<QuoteResult> result = fetchQuote(candidate);
                     if (result.isPresent()) {
                         log.debug("ISIN {} → símbolo hardcoded: {}", isin, candidate);
                         return result;
@@ -56,7 +57,7 @@ public class QuoteService {
             }
             String symbol = resolveSymbol(isin);
             if (symbol == null) return Optional.empty();
-            return fetchPreviousClose(symbol);
+            return fetchQuote(symbol);
         } catch (Exception e) {
             log.warn("No se pudo obtener cotización para {}: {}", isin, e.getMessage());
             return Optional.empty();
@@ -78,14 +79,19 @@ public class QuoteService {
         return symbol;
     }
 
-    private Optional<QuoteResult> fetchPreviousClose(String symbol) throws Exception {
+    private Optional<QuoteResult> fetchQuote(String symbol) throws Exception {
         String url = String.format(CHART_URL, symbol);
         String body = rest.exchange(url, HttpMethod.GET, httpEntity(), String.class).getBody();
         if (body == null) return Optional.empty();
-        JsonNode meta = mapper.readTree(body).path("chart").path("result").get(0).path("meta");
+        JsonNode result = mapper.readTree(body).path("chart").path("result").get(0);
+        if (result == null) return Optional.empty();
+        JsonNode meta = result.path("meta");
 
         // Preferir el precio más actualizado disponible
         double raw = meta.path("regularMarketPrice").asDouble(0);
+        // Solo con precio de mercado tiene sentido la variación del día: si caemos al cierre
+        // anterior, el "precio actual" ya es ese cierre y la variación saldría siempre cero.
+        Double prevRaw = raw == 0 ? null : previousClose(result, raw);
         if (raw == 0) raw = meta.path("regularMarketPreviousClose").asDouble(0);
         if (raw == 0) raw = meta.path("chartPreviousClose").asDouble(0);
         if (raw == 0) return Optional.empty();
@@ -95,12 +101,13 @@ public class QuoteService {
         // GBp = peniques británicos → convertir a GBP dividiendo entre 100
         if ("GBp".equals(currency) || "GBX".equals(currency)) {
             raw = raw / 100.0;
+            if (prevRaw != null) prevRaw = prevRaw / 100.0;
             currency = "GBP";
         }
 
         if ("EUR".equals(currency)) {
             log.debug("Precio ya en EUR, no se necesita conversión: {} {} → EUR", raw, symbol);
-            return Optional.of(new QuoteResult(symbol, BigDecimal.valueOf(raw), "EUR", false));
+            return Optional.of(new QuoteResult(symbol, BigDecimal.valueOf(raw), toDecimal(prevRaw), "EUR", false));
         }
 
         // Convertir a EUR via Yahoo Finance forex (ej: USDEUR=X)
@@ -108,14 +115,52 @@ public class QuoteService {
         if (eurRate == null) {
             // Devolvemos el precio en divisa original; el frontend mostrará solo el precio
             log.debug("No se pudo obtener tipo de cambio {}EUR, devolviendo precio sin convertir: {} {}", currency, raw, symbol);
-            return Optional.of(new QuoteResult(symbol, BigDecimal.valueOf(raw), currency, false));
+            return Optional.of(new QuoteResult(symbol, BigDecimal.valueOf(raw), toDecimal(prevRaw), currency, false));
         }
 
-        BigDecimal priceEur = BigDecimal.valueOf(raw)
-                .multiply(eurRate)
-                .setScale(4, java.math.RoundingMode.HALF_UP);
+        // Ambos precios se convierten al cambio de hoy: la variación diaria refleja así el
+        // movimiento del activo, sin mezclarle el movimiento de la divisa.
+        BigDecimal priceEur = toEur(BigDecimal.valueOf(raw), eurRate);
+        BigDecimal prevEur = prevRaw == null ? null : toEur(BigDecimal.valueOf(prevRaw), eurRate);
         log.debug("Precio convertido a EUR usando tipo de cambio {}EUR = {}: {} {} → {} EUR", currency, eurRate, raw, symbol, priceEur);
-        return Optional.of(new QuoteResult(symbol, priceEur, currency, true));
+        return Optional.of(new QuoteResult(symbol, priceEur, prevEur, currency, true));
+    }
+
+    private BigDecimal toEur(BigDecimal amount, BigDecimal eurRate) {
+        return amount.multiply(eurRate).setScale(4, java.math.RoundingMode.HALF_UP);
+    }
+
+    private BigDecimal toDecimal(Double value) {
+        return value == null ? null : BigDecimal.valueOf(value);
+    }
+
+    /**
+     * Cierre de la sesión anterior a la que refleja {@code price}, en divisa original.
+     *
+     * <p>Yahoo no lo expone en meta con {@code range=5d}: {@code chartPreviousClose} es el cierre
+     * previo a toda la ventana de 5 días, no el de la sesión anterior. Se toma por tanto de la
+     * serie diaria, y como respaldo se deriva de {@code regularMarketChangePercent}.
+     */
+    private Double previousClose(JsonNode result, double price) {
+        List<Double> closes = new ArrayList<>();
+        for (JsonNode c : result.path("indicators").path("quote").path(0).path("close")) {
+            if (c.isNumber() && c.asDouble() > 0) closes.add(c.asDouble());
+        }
+        if (closes.size() >= 2) {
+            // El último punto es la sesión en curso cuando su cierre coincide con el precio actual
+            // (con holgura: la serie llega con menos precisión que meta), y entonces el cierre
+            // anterior es el penúltimo. Si la serie aún no incluye la sesión en curso, el último
+            // cierre ya es el anterior.
+            int last = closes.size() - 1;
+            boolean lastIsCurrent = Math.abs(closes.get(last) - price) <= Math.abs(price) * 1e-3;
+            return closes.get(lastIsCurrent ? last - 1 : last);
+        }
+        JsonNode changePercent = result.path("meta").path("regularMarketChangePercent");
+        if (changePercent.isNumber()) {
+            double ratio = 1 + changePercent.asDouble() / 100.0;
+            if (ratio > 0) return price / ratio;
+        }
+        return null;
     }
 
     /** Obtiene el tipo de cambio divisa→EUR más actualizado vía Yahoo Finance (ej: USDEUR=X) */
