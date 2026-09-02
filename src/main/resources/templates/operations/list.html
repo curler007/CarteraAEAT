@@ -22,21 +22,7 @@
         <span th:text="${success}"></span>
         <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
     </div>
-    <div th:if="${pendingValuation}" class="alert alert-warning alert-dismissible fade show">
-        <strong class="d-block mb-2">
-            <i class="bi bi-exclamation-triangle me-1"></i>
-            Estas entregas de valores han entrado con coste 0: completa su valor de adquisición
-        </strong>
-        <p class="small mb-2">
-            El broker no dice a qué precio se adquirieron (son traspasos o recompensas). Mientras
-            valgan cero, el día que las vendas la ganancia saldrá inflada y pagarás de más.
-            Edítalas y pon el importe que costaron en origen.
-        </p>
-        <ul class="mb-0 small">
-            <li th:each="p : ${pendingValuation}" th:text="${p}"></li>
-        </ul>
-        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-    </div>
+    <div th:replace="~{fragments/layout :: unvaluedAlert(${unvalued})}"></div>
 
     <div th:if="${error}" class="alert alert-danger alert-dismissible fade show">
         <span th:text="${error}"></span>
@@ -126,7 +112,7 @@
                     <!-- Fila de OPERACIÓN -->
                     <tr th:if="${row.operation != null}"
                         th:attr="data-isin=${row.operation.assetName},data-qty=${row.operation.quantity},data-total=${row.operation.total},data-remaining=${lotRemainingQty[row.operation.id] ?: row.operation.quantity},data-remaining-cost=${lotRemainingCost[row.operation.id] ?: row.operation.total}"
-                        th:classappend="${row.operation.pending} ? 'table-danger' : (${row.operation.type.name() == 'SELL'} ? 'table-secondary' : (${lotRowClass[row.operation.id]} ?: ''))">
+                        th:classappend="${row.operation.unvalued} ? 'row-unvalued' : (${row.operation.pending} ? 'table-danger' : (${row.operation.type.name() == 'SELL'} ? 'table-secondary' : (${lotRowClass[row.operation.id]} ?: '')))">
                         <td th:text="${#temporals.format(row.operation.date, 'dd/MM/yyyy')}"></td>
                         <td>
                             <span th:if="${row.operation.type.name() == 'BUY'}"
@@ -139,6 +125,13 @@
                                   class="badge bg-warning text-dark ms-1"
                                   th:text="'⏳ ' + ${@fmt.qty(row.operation.pendingQty)}">
                             </span>
+                            <a th:if="${row.operation.unvalued}"
+                               th:href="@{/operations/{id}/edit(id=${row.operation.id})}"
+                               class="badge text-white text-decoration-none ms-1"
+                               style="background-color:#fd7e14;"
+                               title="Entró sin coste: pon su valor de adquisición">
+                                Sin valorar
+                            </a>
                         </td>
                         <td><strong th:text="${row.operation.ticker}"></strong></td>
                         <td th:text="${row.operation.assetName}"></td>

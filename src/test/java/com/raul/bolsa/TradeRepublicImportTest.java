@@ -327,6 +327,35 @@ class TradeRepublicImportTest {
     }
 
     @Test
+    @DisplayName("Solo la entrega sin coste queda pendiente de valorar; el canje no")
+    void onlyFreeReceiptsCountAsUnvalued() {
+        // Un CANJE vale cero por definición (acciones liberadas), no es un dato que falte
+        csvService.importCsv(alice, ("\ufeff" + OperationCsvService.HEADER + "\n"
+                + "01/06/2025;BUY;NVIDIA;US67066G1040;ING;10;1000;1;GROUP_3;\n"
+                + "02/06/2025;CANJE;NVIDIA;US67066G1040;ING;2;;;GROUP_3;\n")
+                .getBytes(StandardCharsets.UTF_8), ImportMode.ADD);
+
+        csvService.importCsv(alice, file(
+                freeReceipt("2026-05-25", "DELIVERY", "STOCK", "Grifols (A)", "ES0171996087",
+                        "138.0000000000", "", "g1")
+        ), ImportMode.ADD);
+
+        List<Operation> unvalued = operationRepo
+                .findByUserIdAndTypeNotAndTotalLessThanEqualOrderByDateAscIdAsc(
+                        alice, OperationType.CANJE, BigDecimal.ZERO);
+
+        assertEquals(1, unvalued.size(),
+                "Solo la entrega recibida está sin valorar. Obtenidas: "
+                        + unvalued.stream().map(op -> op.getTicker() + "/" + op.getType()).toList());
+        assertEquals("GRIFOLS (A)", unvalued.get(0).getTicker());
+        assertTrue(unvalued.get(0).isUnvalued());
+
+        Operation canje = operationRepo.findByUserId(alice).stream()
+                .filter(op -> op.getType() == OperationType.CANJE).findFirst().orElseThrow();
+        assertFalse(canje.isUnvalued(), "El coste cero de un canje es el correcto, no falta nada");
+    }
+
+    @Test
     @DisplayName("Un fichero sin ninguna compra ni venta no importa nada y lo explica")
     void rejectsFileWithoutTrades() {
         CsvImportResult result = csvService.importCsv(alice, file(

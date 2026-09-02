@@ -110,13 +110,13 @@ public class OperationCsvController {
             msg.append(String.format(" Ignorados %d movimientos que no son compras ni ventas (%s).",
                     result.ignoredCount(), describe(result.ignored())));
         }
-        flash.addFlashAttribute("success", msg.toString());
-
-        // Entraron acciones sin contrapartida en efectivo: mientras valgan cero, venderlas
-        // computaría como ganancia íntegra, así que hay que pedir su valor de adquisición.
+        // Las entregas sin coste no se avisan aquí: el listado y el dashboard las muestran de
+        // forma permanente mientras sigan a cero, que es cuando dejan de importar.
         if (!result.pendingValuation().isEmpty()) {
-            flash.addFlashAttribute("pendingValuation", result.pendingValuation());
+            msg.append(String.format(" %d entraron sin coste y hay que valorarlas.",
+                    result.pendingValuation().size()));
         }
+        flash.addFlashAttribute("success", msg.toString());
         return "redirect:/operations";
     }
 }

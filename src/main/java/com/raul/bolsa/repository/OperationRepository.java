@@ -21,6 +21,13 @@ public interface OperationRepository extends JpaRepository<Operation, Long> {
 
     List<Operation> findByUserId(Long userId);
 
+    /**
+     * Operaciones que entraron sin coste conocido, en orden cronológico. Se excluyen los CANJE,
+     * cuyo coste cero es correcto por definición.
+     */
+    List<Operation> findByUserIdAndTypeNotAndTotalLessThanEqualOrderByDateAscIdAsc(
+            Long userId, OperationType type, BigDecimal total);
+
     /** Acceso por id comprobando propietario: evita que un usuario toque datos de otro. */
     Optional<Operation> findByIdAndUserId(Long id, Long userId);
 
