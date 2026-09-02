@@ -5,6 +5,7 @@ import com.raul.bolsa.domain.OperationType;
 import com.raul.bolsa.repository.FifoLotRepository;
 import com.raul.bolsa.repository.OperationRepository;
 import com.raul.bolsa.repository.SaleRecordRepository;
+import com.raul.bolsa.repository.SplitRepository;
 import com.raul.bolsa.web.dto.OperationForm;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -24,17 +25,23 @@ public class OperationService {
     private final OperationRepository operationRepo;
     private final FifoLotRepository fifoLotRepo;
     private final SaleRecordRepository saleRecordRepo;
+    private final SplitRepository splitRepo;
     private final FifoService fifoService;
 
     @Transactional
     public Operation save(Long userId, OperationForm form) {
         Operation op = buildOperation(userId, form);
 
-        // Recalcular si: hay ventas con SaleRecords de fecha >= nueva op, O hay ventas pendientes
+        // Recalcular si: hay ventas con SaleRecords de fecha >= nueva op, hay ventas pendientes,
+        // o la operación es anterior a un split ya registrado. Sin lo último su lote nacería sin
+        // aplicar ese split y se quedaría con menos títulos de los que le corresponden, que es
+        // justo lo que pasa al cargar operaciones antiguas en una cartera que ya tiene splits.
         boolean needsRecalc = saleRecordRepo.existsByUserIdAndTickerAndSaleDateGreaterThanEqual(
                 userId, op.getTicker(), op.getDate())
                 || operationRepo.existsByUserIdAndTickerAndTypeAndPendingQtyGreaterThan(
-                        userId, op.getTicker(), OperationType.SELL, BigDecimal.ZERO);
+                        userId, op.getTicker(), OperationType.SELL, BigDecimal.ZERO)
+                || splitRepo.existsByUserIdAndTickerAndDateAfter(
+                        userId, op.getTicker(), op.getDate());
 
         if (op.getType() != OperationType.SELL) {
             operationRepo.save(op);
