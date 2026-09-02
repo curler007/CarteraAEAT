@@ -12,6 +12,7 @@ import com.raul.bolsa.web.dto.CsvImportResult;
 import com.raul.bolsa.web.dto.ImportMode;
 import com.raul.bolsa.web.dto.OperationForm;
 import com.raul.bolsa.web.dto.SplitForm;
+import com.raul.bolsa.web.dto.TradeRepublicParseResult;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -24,6 +25,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Exporta e importa la cartera de un usuario en un único CSV.
@@ -52,12 +54,16 @@ public class OperationCsvService {
     /** Tipo reservado para las filas de split; el resto son valores de OperationType. */
     private static final String SPLIT = "SPLIT";
 
+    public static final String FORMAT_OWN = "formato propio";
+    public static final String FORMAT_TRADE_REPUBLIC = "Trade Republic";
+
     private final OperationRepository operationRepo;
     private final SplitRepository splitRepo;
     private final FifoLotRepository fifoLotRepo;
     private final SaleRecordRepository saleRecordRepo;
     private final OperationService operationService;
     private final SplitService splitService;
+    private final TradeRepublicCsvService tradeRepublicService;
 
     // ─── Exportación ─────────────────────────────────────────────────────────
 
@@ -117,6 +123,12 @@ public class OperationCsvService {
     @Transactional
     public CsvImportResult importCsv(Long userId, byte[] content, ImportMode mode) {
         String text = stripBom(new String(content, StandardCharsets.UTF_8));
+
+        List<List<String>> tradeRepublicRows = parse(text, TradeRepublicCsvService.separator());
+        if (!tradeRepublicRows.isEmpty() && TradeRepublicCsvService.matches(tradeRepublicRows.get(0))) {
+            return importTradeRepublic(userId, tradeRepublicRows, mode);
+        }
+
         List<List<String>> rows = parse(text);
 
         if (rows.isEmpty()) {
@@ -168,7 +180,52 @@ public class OperationCsvService {
 
         log.info("Importadas {} operaciones y {} splits para el usuario {} (modo {})",
                 operations.size(), splits.size(), userId, mode);
-        return new CsvImportResult(operations.size(), splits.size(), List.of());
+        return new CsvImportResult(FORMAT_OWN, operations.size(), splits.size(),
+                Map.of(), 0, List.of(), List.of());
+    }
+
+    // ─── Importación de Trade Republic ───────────────────────────────────────
+
+    /**
+     * Del fichero del broker solo se cargan las compras y ventas; el resto de movimientos no
+     * afecta a ninguna posición. Las operaciones ya importadas antes se detectan por su
+     * transaction_id y se omiten, así que reimportar el histórico completo es inofensivo.
+     */
+    private CsvImportResult importTradeRepublic(Long userId, List<List<String>> rows, ImportMode mode) {
+        // En REPLACE se parte de cero, así que no hay tickers previos que heredar ni duplicados.
+        List<Operation> existing = mode == ImportMode.REPLACE
+                ? List.of()
+                : operationRepo.findByUserId(userId);
+
+        TradeRepublicParseResult parsed = tradeRepublicService.parse(rows, existing);
+
+        if (!parsed.errors().isEmpty()) {
+            return CsvImportResult.failed(parsed.errors());
+        }
+        // Que no haya nada nuevo no es un error: es lo que pasa al reimportar sin movimientos
+        // nuevos, y el usuario no tiene nada que corregir.
+        if (parsed.operations().isEmpty() && parsed.duplicates() > 0) {
+            return new CsvImportResult(FORMAT_TRADE_REPUBLIC, 0, 0,
+                    parsed.ignored(), parsed.duplicates(), List.of(), List.of());
+        }
+        if (parsed.operations().isEmpty()) {
+            return CsvImportResult.failed(
+                    List.of("El fichero no contiene ninguna compra ni venta de valores."));
+        }
+
+        if (mode == ImportMode.REPLACE) {
+            deleteEverythingOf(userId);
+        }
+
+        List<OperationForm> operations = new ArrayList<>(parsed.operations());
+        operations.sort(Comparator.comparing(OperationForm::getDate));
+        operations.forEach(f -> operationService.save(userId, f));
+
+        log.info("Importadas {} operaciones de Trade Republic para el usuario {} "
+                        + "(modo {}, {} movimientos ignorados, {} duplicados)",
+                operations.size(), userId, mode, parsed.ignoredCount(), parsed.duplicates());
+        return new CsvImportResult(FORMAT_TRADE_REPUBLIC, operations.size(), 0,
+                parsed.ignored(), parsed.duplicates(), parsed.pendingValuation(), List.of());
     }
 
     private void deleteEverythingOf(Long userId) {
@@ -307,6 +364,10 @@ public class OperationCsvService {
      * puede contener el separador, comillas escapadas ("") o saltos de línea.
      */
     static List<List<String>> parse(String text) {
+        return parse(text, SEP);
+    }
+
+    static List<List<String>> parse(String text, char sep) {
         List<List<String>> rows = new ArrayList<>();
         List<String> row = new ArrayList<>();
         StringBuilder field = new StringBuilder();
@@ -327,7 +388,7 @@ public class OperationCsvService {
                 }
             } else if (c == '"') {
                 inQuotes = true;
-            } else if (c == SEP) {
+            } else if (c == sep) {
                 row.add(field.toString());
                 field.setLength(0);
             } else if (c == '\n' || c == '\r') {

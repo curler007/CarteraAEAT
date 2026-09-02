@@ -18,10 +18,48 @@
         </ul>
     </div>
 
+    <div class="alert alert-info">
+        <i class="bi bi-magic me-1"></i>
+        El formato se detecta solo: puedes subir tanto el CSV de esta aplicación como la
+        <strong>Exportación de transacción</strong> que genera Trade Republic, sin convertir nada.
+    </div>
+
+    <!-- ═══ Trade Republic ═══ -->
+    <div class="card shadow-sm mb-4">
+        <div class="card-header bg-light fw-semibold">
+            <i class="bi bi-bank me-1"></i>Exportación de Trade Republic
+        </div>
+        <div class="card-body">
+            <p class="mb-2">
+                Se reconoce por sus propias columnas, así que basta con subir el fichero tal cual
+                lo descargas de la app del broker.
+            </p>
+            <ul class="mb-2 small">
+                <li>Se importan las <strong>compras y ventas de valores</strong> (acciones, fondos
+                    y cripto), con su comisión.</li>
+                <li>Se ignora todo lo que no mueve posiciones: ingresos, traspasos, dividendos,
+                    intereses y promociones. Al terminar se te dice cuántos se han dejado fuera.</li>
+                <li>El broker se rellena como <code>Trade Republic</code> y el grupo AEAT se deduce
+                    del país del ISIN, salvo que ya tengas ese valor: entonces se respeta el ticker
+                    y el grupo que ya usabas.</li>
+                <li>Cada operación guarda el identificador de la transacción de origen, de modo que
+                    <strong>puedes volver a importar el histórico completo</strong> cuantas veces
+                    quieras: lo ya cargado se omite en vez de duplicarse.</li>
+                <li>Las operaciones de este broker que ya hubieras metido a mano tampoco se
+                    duplican: se reconocen por coincidir en fecha, valor, tipo y cantidad. Usa el
+                    modo <strong>Añadir</strong> con tranquilidad, incluso la primera vez.</li>
+            </ul>
+            <p class="mb-0 small text-muted">
+                Los splits no vienen en este fichero como tales; regístralos desde
+                <a href="/splits">Splits</a>, donde además se te sugieren automáticamente.
+            </p>
+        </div>
+    </div>
+
     <!-- ═══ Formato ═══ -->
     <div class="card shadow-sm mb-4">
         <div class="card-header bg-light fw-semibold">
-            <i class="bi bi-info-circle me-1"></i>Formato del fichero
+            <i class="bi bi-info-circle me-1"></i>Formato propio de la aplicación
         </div>
         <div class="card-body">
             <p class="mb-2">

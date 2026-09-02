@@ -126,6 +126,7 @@ public class OperationController {
         model.addAttribute("portfolioPercent", portfolioPercent);
         model.addAttribute("totalCost", totalCost);
         model.addAttribute("salesByYear", salesByYear);
+        model.addAttribute("unvalued", unvaluedOperations(uid));
         return "dashboard";
     }
 
@@ -229,6 +230,7 @@ public class OperationController {
             return b.operation().getId().compareTo(a.operation().getId());
         });
         model.addAttribute("history", history);
+        model.addAttribute("unvalued", unvaluedOperations(uid));
 
         return "operations/list";
     }
@@ -325,6 +327,15 @@ public class OperationController {
                         op -> new TickerInfo(op.getAssetName(), op.getAeatGroup().name()),
                         (existing, replacement) -> existing   // si hay duplicados, queda el primero
                 ));
+    }
+
+    /**
+     * Operaciones que entraron sin coste conocido. Se avisa de ellas en el dashboard y en el
+     * listado mientras sigan a cero: es un dato que falta y que falsea la ganancia al vender.
+     */
+    private List<Operation> unvaluedOperations(Long userId) {
+        return operationRepo.findByUserIdAndTypeNotAndTotalLessThanEqualOrderByDateAscIdAsc(
+                userId, OperationType.CANJE, BigDecimal.ZERO);
     }
 
     private OperationForm toForm(Operation op) {

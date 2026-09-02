@@ -78,4 +78,15 @@ public class Operation {
     public boolean isPending() {
         return pendingQty != null && pendingQty.compareTo(BigDecimal.ZERO) > 0;
     }
+
+    /**
+     * Entró en la cartera sin que sepamos lo que costó: normalmente un traspaso recibido de otro
+     * broker. Mientras siga a cero, venderla computaría toda la venta como ganancia.
+     *
+     * <p>Un CANJE no cuenta: sus acciones son liberadas y su coste cero es el correcto
+     * (LIRPF Art. 37.1.a), no un dato que falte.
+     */
+    public boolean isUnvalued() {
+        return type != OperationType.CANJE && total != null && total.signum() == 0;
+    }
 }

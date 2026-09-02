@@ -19,6 +19,12 @@
         .badge-sell { background-color: #dc3545; }
         .gain-pos   { color: #198754; font-weight: 600; }
         .gain-neg   { color: #dc3545; font-weight: 600; }
+        /* Operación que entró sin coste conocido: tiene que saltar a la vista en el listado */
+        .row-unvalued > td {
+            background-color: #ffe8cc !important;
+            box-shadow: inset 0 -1px 0 #fd7e14;
+        }
+        .row-unvalued > td:first-child { box-shadow: inset 4px -1px 0 #fd7e14; }
     </style>
 </head>
 
@@ -69,6 +75,33 @@
         </div>
     </div>
 </nav>
+
+<!-- ═══ AVISO DE OPERACIONES SIN VALORAR ═══ -->
+<div th:fragment="unvaluedAlert(operations)"
+     th:if="${operations != null and !operations.isEmpty()}"
+     class="alert alert-warning border-warning shadow-sm">
+    <strong class="d-block mb-2">
+        <i class="bi bi-exclamation-triangle-fill me-1"></i>
+        <span th:text="${#lists.size(operations) == 1
+                        ? 'Hay una operación que entró sin coste: completa su valor de adquisición'
+                        : 'Hay ' + #lists.size(operations) + ' operaciones que entraron sin coste: '
+                          + 'completa su valor de adquisición'}">
+        </span>
+    </strong>
+    <p class="small mb-2">
+        Son títulos recibidos sin pago —traspasos de otro broker o recompensas— y el fichero del
+        broker no dice a qué precio se adquirieron. Mientras figuren a cero, el día que los vendas
+        la ganancia saldrá inflada y tributarás de más.
+    </p>
+    <ul class="mb-0 small">
+        <li th:each="op : ${operations}">
+            <a th:href="@{/operations/{id}/edit(id=${op.id})}" class="fw-semibold"
+               th:text="${#temporals.format(op.date, 'dd/MM/yyyy')} + ' · ' + ${op.ticker}
+                        + ' · ' + ${@fmt.qty(op.quantity)} + ' títulos'">
+            </a>
+        </li>
+    </ul>
+</div>
 
 <!-- ═══ SCRIPTS ═══ -->
 <div th:fragment="scripts">

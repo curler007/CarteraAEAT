@@ -55,6 +55,13 @@ public class OperationCsvController {
                 .body(sample.getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
 
+    /** "CASH / DIVIDEND: 22, CASH / TRANSFER_INBOUND: 4, ..." */
+    private static String describe(java.util.Map<String, Integer> ignored) {
+        return ignored.entrySet().stream()
+                .map(e -> e.getKey() + ": " + e.getValue())
+                .collect(java.util.stream.Collectors.joining(", "));
+    }
+
     @GetMapping("/operations/import")
     public String importForm(Model model) {
         model.addAttribute("header", OperationCsvService.HEADER);
@@ -88,9 +95,28 @@ public class OperationCsvController {
             return "operations/import";
         }
 
-        flash.addFlashAttribute("success", String.format(
-                "Importación completada: %d operaciones y %d splits. El FIFO se ha recalculado.",
-                result.operations(), result.splits()));
+        StringBuilder msg = new StringBuilder(String.format(
+                "Importación completada (%s): %d operaciones", result.format(), result.operations()));
+        if (result.splits() > 0) msg.append(" y ").append(result.splits()).append(" splits");
+        msg.append(result.operations() > 0 || result.splits() > 0
+                ? ". El FIFO se ha recalculado."
+                : ": tu cartera ya estaba al día.");
+        if (result.duplicates() > 0) {
+            msg.append(String.format(
+                    " Se han omitido %d operaciones que ya estaban en tu cartera.",
+                    result.duplicates()));
+        }
+        if (result.ignoredCount() > 0) {
+            msg.append(String.format(" Ignorados %d movimientos que no son compras ni ventas (%s).",
+                    result.ignoredCount(), describe(result.ignored())));
+        }
+        // Las entregas sin coste no se avisan aquí: el listado y el dashboard las muestran de
+        // forma permanente mientras sigan a cero, que es cuando dejan de importar.
+        if (!result.pendingValuation().isEmpty()) {
+            msg.append(String.format(" %d entraron sin coste y hay que valorarlas.",
+                    result.pendingValuation().size()));
+        }
+        flash.addFlashAttribute("success", msg.toString());
         return "redirect:/operations";
     }
 }
