@@ -181,7 +181,7 @@ public class OperationCsvService {
         log.info("Importadas {} operaciones y {} splits para el usuario {} (modo {})",
                 operations.size(), splits.size(), userId, mode);
         return new CsvImportResult(FORMAT_OWN, operations.size(), splits.size(),
-                Map.of(), 0, List.of());
+                Map.of(), 0, List.of(), List.of());
     }
 
     // ─── Importación de Trade Republic ───────────────────────────────────────
@@ -206,7 +206,7 @@ public class OperationCsvService {
         // nuevos, y el usuario no tiene nada que corregir.
         if (parsed.operations().isEmpty() && parsed.duplicates() > 0) {
             return new CsvImportResult(FORMAT_TRADE_REPUBLIC, 0, 0,
-                    parsed.ignored(), parsed.duplicates(), List.of());
+                    parsed.ignored(), parsed.duplicates(), List.of(), List.of());
         }
         if (parsed.operations().isEmpty()) {
             return CsvImportResult.failed(
@@ -225,7 +225,7 @@ public class OperationCsvService {
                         + "(modo {}, {} movimientos ignorados, {} duplicados)",
                 operations.size(), userId, mode, parsed.ignoredCount(), parsed.duplicates());
         return new CsvImportResult(FORMAT_TRADE_REPUBLIC, operations.size(), 0,
-                parsed.ignored(), parsed.duplicates(), List.of());
+                parsed.ignored(), parsed.duplicates(), parsed.pendingValuation(), List.of());
     }
 
     private void deleteEverythingOf(Long userId) {

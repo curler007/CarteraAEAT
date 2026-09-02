@@ -10,6 +10,7 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -22,9 +23,14 @@ import java.util.TreeMap;
 /**
  * Traduce la "Exportación de transacción" de Trade Republic a operaciones de la cartera.
  *
- * <p>Del fichero solo interesan las compras y ventas de valores ({@code category=TRADING}).
- * El resto de movimientos —ingresos, traspasos, dividendos, intereses, promociones— no altera
- * ninguna posición y se ignora, contándolo para poder informar de cuántos se han dejado fuera.
+ * <p>Del fichero interesan las compras y ventas de valores ({@code category=TRADING}) y las
+ * entregas gratuitas ({@code FREE_RECEIPT}), que son acciones que entran en la cartera sin
+ * contrapartida en efectivo: traspasos desde otro broker o recompensas. Estas últimas se dan de
+ * alta con coste cero y se devuelven aparte para poder pedir al usuario que las valore, porque
+ * un coste cero convertiría toda la venta futura en ganancia.
+ *
+ * <p>El resto de movimientos —ingresos, dividendos, intereses, promociones— no altera ninguna
+ * posición y se ignora, contándolo para poder informar de cuántos se han dejado fuera.
  *
  * <p>Cada operación importada guarda en las notas el {@code transaction_id} de origen, de forma
  * que reimportar un fichero que solapa con lo ya cargado no duplica nada: Trade Republic exporta
@@ -49,10 +55,19 @@ public class TradeRepublicCsvService {
     /** Prefijo con el que se marca en las notas el id de la transacción de origen. */
     public static final String NOTE_PREFIX = "TR:";
 
+    /** Coletilla en las notas de las entregas recibidas sin contrapartida en efectivo. */
+    public static final String NOTE_FREE_RECEIPT = "traspaso recibido sin coste";
+
+    /** Entrega de valores sin pago: entran acciones, pero el fichero no dice a qué precio. */
+    private static final String FREE_RECEIPT = "FREE_RECEIPT";
+
     /** Columnas que identifican inequívocamente el fichero de Trade Republic. */
     private static final List<String> SIGNATURE = List.of("datetime", "asset_class", "transaction_id");
 
     private static final char SEP = ',';
+
+    private static final DateTimeFormatter DESCRIPTION_DATE =
+            DateTimeFormatter.ofPattern("dd/MM/yyyy");
 
     /** Tope de ejecuciones de un mismo valor y día al buscar combinaciones (2^16 como máximo). */
     private static final int MAX_GROUP_FOR_SUBSET = 16;
@@ -101,7 +116,7 @@ public class TradeRepublicCsvService {
             tickerByIsin.putIfAbsent(op.getAssetName().trim().toUpperCase(), op.getTicker());
             groupByIsin.putIfAbsent(op.getAssetName().trim().toUpperCase(), op.getAeatGroup());
             if (op.getNotes() != null && op.getNotes().startsWith(NOTE_PREFIX)) {
-                importedIds.add(op.getNotes().substring(NOTE_PREFIX.length()).trim());
+                importedIds.add(transactionId(op.getNotes()));
             } else {
                 existingByContent
                         .computeIfAbsent(contentKey(op.getDate(), op.getAssetName(), op.getType()),
@@ -122,8 +137,7 @@ public class TradeRepublicCsvService {
 
             String category = get(row, col, "category");
             String type = get(row, col, "type");
-            if (!"TRADING".equalsIgnoreCase(category)
-                    || !("BUY".equalsIgnoreCase(type) || "SELL".equalsIgnoreCase(type))) {
+            if (!isImportable(category, type)) {
                 ignored.merge(label(category, type), 1, Integer::sum);
                 continue;
             }
@@ -142,7 +156,15 @@ public class TradeRepublicCsvService {
         }
 
         duplicates += dropAlreadyInPortfolio(operations, existingByContent);
-        return new TradeRepublicParseResult(operations, ignored, duplicates, errors);
+
+        // Solo se piden valorar las que de verdad se van a dar de alta: si la entrega ya estaba
+        // registrada, el usuario ya le puso precio en su día.
+        List<String> pendingValuation = operations.stream()
+                .filter(f -> f.getNotes() != null && f.getNotes().endsWith(NOTE_FREE_RECEIPT))
+                .map(TradeRepublicCsvService::describe)
+                .toList();
+
+        return new TradeRepublicParseResult(operations, ignored, duplicates, pendingValuation, errors);
     }
 
     private OperationForm toForm(List<String> row, Map<String, Integer> col, String type,
@@ -155,16 +177,27 @@ public class TradeRepublicCsvService {
         BigDecimal shares = decimal(get(row, col, "shares"), "shares").abs();
         if (shares.signum() <= 0) throw new IllegalArgumentException("la cantidad debe ser mayor que 0.");
 
-        BigDecimal fee = optionalDecimal(get(row, col, "fee"), "fee").abs();
-        BigDecimal gross = grossAmount(row, col, shares);
+        boolean freeReceipt = FREE_RECEIPT.equalsIgnoreCase(type);
+        BigDecimal fee = freeReceipt
+                ? BigDecimal.ZERO
+                : optionalDecimal(get(row, col, "fee"), "fee").abs();
 
         // total sigue el criterio de la aplicación: en una compra incluye la comisión (mayor valor
-        // de adquisición) y en una venta la descuenta (menor valor de transmisión).
-        OperationType opType = "BUY".equalsIgnoreCase(type) ? OperationType.BUY : OperationType.SELL;
-        BigDecimal total = opType == OperationType.BUY ? gross.add(fee) : gross.subtract(fee);
-        if (total.signum() <= 0) {
-            throw new IllegalArgumentException(
-                    "el importe resultante (" + total + ") no es mayor que 0.");
+        // de adquisición) y en una venta la descuenta (menor valor de transmisión). La entrega
+        // gratuita entra a cero porque el fichero no dice cuánto costó en su origen.
+        BigDecimal total;
+        OperationType opType;
+        if (freeReceipt) {
+            opType = OperationType.BUY;
+            total = BigDecimal.ZERO;
+        } else {
+            opType = "BUY".equalsIgnoreCase(type) ? OperationType.BUY : OperationType.SELL;
+            BigDecimal gross = grossAmount(row, col, shares);
+            total = opType == OperationType.BUY ? gross.add(fee) : gross.subtract(fee);
+            if (total.signum() <= 0) {
+                throw new IllegalArgumentException(
+                        "el importe resultante (" + total + ") no es mayor que 0.");
+            }
         }
 
         OperationForm f = new OperationForm();
@@ -177,8 +210,19 @@ public class TradeRepublicCsvService {
         f.setTotal(total);
         f.setCommission(fee);
         f.setAeatGroup(groupByIsin.computeIfAbsent(isin, TradeRepublicCsvService::inferGroup));
-        f.setNotes(txId.isEmpty() ? null : NOTE_PREFIX + txId);
+        f.setNotes(note(txId, freeReceipt));
         return f;
+    }
+
+    /** "25/05/2026 · GRIFOLS · 138 títulos", para que el usuario sepa cuál tiene que valorar. */
+    private static String describe(OperationForm f) {
+        return DESCRIPTION_DATE.format(f.getDate()) + " · " + f.getTicker() + " · "
+                + f.getQuantity().stripTrailingZeros().toPlainString() + " títulos";
+    }
+
+    private static String note(String txId, boolean freeReceipt) {
+        if (txId.isEmpty()) return freeReceipt ? NOTE_FREE_RECEIPT : null;
+        return NOTE_PREFIX + txId + (freeReceipt ? " " + NOTE_FREE_RECEIPT : "");
     }
 
     /**
@@ -208,6 +252,21 @@ public class TradeRepublicCsvService {
         String country = isin.length() >= 2 ? isin.substring(0, 2) : "";
         if ("ES".equals(country)) return AeatGroup.GROUP_1;
         return EUROPEAN.contains(country) ? AeatGroup.GROUP_2 : AeatGroup.GROUP_3;
+    }
+
+    /** Movimientos que sí cambian la posición: compraventas y entregas gratuitas. */
+    private static boolean isImportable(String category, String type) {
+        if ("TRADING".equalsIgnoreCase(category)) {
+            return "BUY".equalsIgnoreCase(type) || "SELL".equalsIgnoreCase(type);
+        }
+        return FREE_RECEIPT.equalsIgnoreCase(type);
+    }
+
+    /** El id ocupa hasta el primer espacio; lo que sigue son anotaciones nuestras. */
+    private static String transactionId(String notes) {
+        String rest = notes.substring(NOTE_PREFIX.length()).trim();
+        int space = rest.indexOf(' ');
+        return space < 0 ? rest : rest.substring(0, space);
     }
 
     private static String label(String category, String type) {

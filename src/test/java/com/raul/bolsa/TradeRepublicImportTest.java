@@ -278,6 +278,55 @@ class TradeRepublicImportTest {
     }
 
     @Test
+    @DisplayName("Las entregas gratuitas entran con coste 0 y se avisa de que hay que valorarlas")
+    void importsFreeReceiptsAtZeroCost() {
+        CsvImportResult result = csvService.importCsv(alice, file(
+                buy("2025-07-28", "Apple", "US0378331005", "10.0000000000", "9.500000", "-95.00", "-1.00", "t4"),
+                // Traspaso desde otro broker: entran títulos y el fichero no dice a qué precio
+                freeReceipt("2026-05-25", "DELIVERY", "STOCK", "Grifols (A)", "ES0171996087",
+                        "138.0000000000", "", "g1")
+        ), ImportMode.ADD);
+
+        assertTrue(result.ok(), "No debería haber errores: " + result.errors());
+        assertEquals(2, result.operations(), "La entrega también es una operación");
+
+        Operation entrega = sorted().stream()
+                .filter(op -> op.getTicker().equals("GRIFOLS (A)")).findFirst().orElseThrow();
+        assertEquals(OperationType.BUY, entrega.getType(), "Entran títulos: es una entrada de lote");
+        assertEquals(0, BigDecimal.ZERO.compareTo(entrega.getTotal()),
+                "El fichero no dice cuánto costó, así que entra a cero");
+        assertEquals(0, new BigDecimal("138").compareTo(entrega.getQuantity()));
+        assertTrue(entrega.getNotes().contains("traspaso recibido sin coste"),
+                "La nota debería decir de dónde sale. Obtenido: " + entrega.getNotes());
+
+        assertEquals(1, result.pendingValuation().size(),
+                "Solo la entrega necesita valoración, no la compra normal");
+        assertTrue(result.pendingValuation().get(0).contains("25/05/2026")
+                        && result.pendingValuation().get(0).contains("GRIFOLS (A)")
+                        && result.pendingValuation().get(0).contains("138"),
+                "El aviso debe identificar la operación: " + result.pendingValuation());
+    }
+
+    @Test
+    @DisplayName("Reimportar no duplica una entrega gratuita ni vuelve a pedir su valoración")
+    void freeReceiptIsNotDuplicatedOnReimport() {
+        byte[] csv = file(freeReceipt("2026-06-28", "DELIVERY", "CRYPTO", "Bitcoin", "BTC",
+                "0.0049960000", "51968.110000", "b1"));
+
+        CsvImportResult first = csvService.importCsv(alice, csv, ImportMode.ADD);
+        assertEquals(1, first.operations());
+        assertEquals(1, first.pendingValuation().size());
+
+        // La coletilla de la nota no puede estropear la lectura del transaction_id
+        CsvImportResult second = csvService.importCsv(alice, csv, ImportMode.ADD);
+        assertEquals(0, second.operations(), "Ya estaba importada");
+        assertEquals(1, second.duplicates());
+        assertTrue(second.pendingValuation().isEmpty(),
+                "No se debe volver a pedir valorar algo que ya estaba");
+        assertEquals(1, operationRepo.findByUserId(alice).size());
+    }
+
+    @Test
     @DisplayName("Un fichero sin ninguna compra ni venta no importa nada y lo explica")
     void rejectsFileWithoutTrades() {
         CsvImportResult result = csvService.importCsv(alice, file(
@@ -327,6 +376,13 @@ class TradeRepublicImportTest {
     private static String sell(String date, String name, String isin, String shares,
                                String price, String amount, String fee, String txId) {
         return trade(date, "TRADING", "SELL", "STOCK", name, isin, shares, price, amount, fee, txId);
+    }
+
+    /** Entrega de títulos sin pago: hay cantidad, pero no importe. */
+    private static String freeReceipt(String date, String category, String assetClass, String name,
+                                      String symbol, String shares, String price, String txId) {
+        return trade(date, category, "FREE_RECEIPT", assetClass, name, symbol,
+                shares, price, "", "", txId);
     }
 
     /** Movimiento de efectivo: sin valor, sin cantidad y sin precio. */

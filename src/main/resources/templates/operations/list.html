@@ -22,6 +22,22 @@
         <span th:text="${success}"></span>
         <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
     </div>
+    <div th:if="${pendingValuation}" class="alert alert-warning alert-dismissible fade show">
+        <strong class="d-block mb-2">
+            <i class="bi bi-exclamation-triangle me-1"></i>
+            Estas entregas de valores han entrado con coste 0: completa su valor de adquisición
+        </strong>
+        <p class="small mb-2">
+            El broker no dice a qué precio se adquirieron (son traspasos o recompensas). Mientras
+            valgan cero, el día que las vendas la ganancia saldrá inflada y pagarás de más.
+            Edítalas y pon el importe que costaron en origen.
+        </p>
+        <ul class="mb-0 small">
+            <li th:each="p : ${pendingValuation}" th:text="${p}"></li>
+        </ul>
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+
     <div th:if="${error}" class="alert alert-danger alert-dismissible fade show">
         <span th:text="${error}"></span>
         <button type="button" class="btn-close" data-bs-dismiss="alert"></button>

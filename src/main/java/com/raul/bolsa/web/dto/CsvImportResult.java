@@ -11,6 +11,8 @@ import java.util.Map;
  * @param ignored    movimientos descartados por no mover posiciones, contados por tipo
  *                   (solo en los ficheros de broker; vacío en el formato propio)
  * @param duplicates operaciones omitidas por estar ya importadas
+ * @param pendingValuation entregas dadas de alta a coste cero, pendientes de que el usuario
+ *                         les ponga su valor de adquisición real
  */
 public record CsvImportResult(
         String format,
@@ -18,6 +20,7 @@ public record CsvImportResult(
         int splits,
         Map<String, Integer> ignored,
         int duplicates,
+        List<String> pendingValuation,
         List<String> errors
 ) {
     public boolean ok() {
@@ -29,6 +32,6 @@ public record CsvImportResult(
     }
 
     public static CsvImportResult failed(List<String> errors) {
-        return new CsvImportResult("", 0, 0, Map.of(), 0, errors);
+        return new CsvImportResult("", 0, 0, Map.of(), 0, List.of(), errors);
     }
 }

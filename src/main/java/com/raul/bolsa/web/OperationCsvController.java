@@ -111,6 +111,12 @@ public class OperationCsvController {
                     result.ignoredCount(), describe(result.ignored())));
         }
         flash.addFlashAttribute("success", msg.toString());
+
+        // Entraron acciones sin contrapartida en efectivo: mientras valgan cero, venderlas
+        // computaría como ganancia íntegra, así que hay que pedir su valor de adquisición.
+        if (!result.pendingValuation().isEmpty()) {
+            flash.addFlashAttribute("pendingValuation", result.pendingValuation());
+        }
         return "redirect:/operations";
     }
 }
