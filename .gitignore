@@ -39,3 +39,6 @@ bolsa.db
 bolsa.db.*
 CLAUDE.md
 .claude/
+### Exportaciones de brokers (datos personales) ###
+*.csv
+!src/test/resources/**/*.csv
