@@ -107,6 +107,23 @@
         <td x:num="125.00">125.00</td>
       </tr>
 
+      <!-- Mismo fondo C, pero el gestor ya lo etiqueta con la gestora delante. Tiene que quedar
+           una sola posición, con el nombre más reciente: dos tickers para el mismo ISIN partirían
+           el FIFO en dos. -->
+      <tr>
+        <td align="center">2025-01-15&nbsp;</td>
+        <td align="center">2025-01-16&nbsp;</td>
+        <td> 100000009</td>
+        <td>FONDOS EXTRANJEROS</td>
+        <td>SUSCRIPCION</td>
+        <td>IE0000000003</td>
+        <td>GESTORA FONDO C IDX P AC USD</td>
+        <td x:num="10.00000000">10.00000000</td>
+        <td>USD</td>
+        <td x:num="12.5000000">12.5000000</td>
+        <td x:num="125.00">125.00</td>
+      </tr>
+
       <!-- Único movimiento que tributa. -->
       <tr>
         <td align="center">2025-03-20&nbsp;</td>

@@ -52,6 +52,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *   03/06/2024  traspaso A → 120 tít.   1500 €   consume los 100 del primer lote y 20 del segundo
  *   05/06/2024  traspaso → B  75 tít.   1500 €   hereda 1240 € de coste y las dos fechas
  *   10/09/2024  compra C      10 tít.    125 USD
+ *   15/01/2025  compra C      10 tít.    125 USD  el mismo fondo, ya con otro nombre
  *   20/03/2025  reembolso B   30 tít.    700 €   único movimiento que tributa
  * </pre>
  *
@@ -66,6 +67,11 @@ class InversisImportTest {
     private static final String FUND_A = "IE0000000001";
     private static final String FUND_B = "IE0000000002";
     private static final String FUND_C = "IE0000000003";
+
+    /** El ticker es el nombre del fondo, que es la columna "Valor" del extracto. */
+    private static final String NAME_A = "FONDO A INDEX P ACC EUR";
+    private static final String NAME_B = "FONDO B INDEX P ACC EUR";
+    private static final String NAME_C = "GESTORA FONDO C IDX P AC USD";
 
     @DynamicPropertySource
     static void datasource(DynamicPropertyRegistry registry) throws IOException {
@@ -127,11 +133,11 @@ class InversisImportTest {
 
         assertEquals(List.of(), result.errors());
         assertEquals(OperationCsvService.FORMAT_INVERSIS, result.format());
-        // 3 compras + 1 salida + 1 entrada + 1 reembolso; las dos órdenes del 10/01 van juntas
-        assertEquals(6, result.operations());
+        // 4 compras + 1 salida + 1 entrada + 1 reembolso; las dos órdenes del 10/01 van juntas
+        assertEquals(7, result.operations());
         assertEquals(1, result.ignoredCount(), "la comisión de gestión no mueve posiciones");
 
-        Operation first = operations(FUND_A).get(0);
+        Operation first = operations(NAME_A).get(0);
         assertEquals(LocalDate.of(2024, 1, 10), first.getDate());
         assertEquals(0, new BigDecimal("100").compareTo(first.getQuantity()));
         assertEquals(0, new BigDecimal("1000").compareTo(first.getTotal()));
@@ -145,13 +151,13 @@ class InversisImportTest {
     void mapsMovementTypes() throws IOException {
         importFixture(ImportMode.ADD);
 
-        assertEquals(OperationType.TRASPASO_OUT, single(FUND_A, OperationType.TRASPASO_OUT).getType());
-        assertEquals(OperationType.TRASPASO_IN, single(FUND_B, OperationType.TRASPASO_IN).getType());
+        assertEquals(OperationType.TRASPASO_OUT, single(NAME_A, OperationType.TRASPASO_OUT).getType());
+        assertEquals(OperationType.TRASPASO_IN, single(NAME_B, OperationType.TRASPASO_IN).getType());
 
         // Las dos patas quedan emparejadas: es lo que permite que el coste viaje entre fondos
-        String out = single(FUND_A, OperationType.TRASPASO_OUT).getTransferId();
+        String out = single(NAME_A, OperationType.TRASPASO_OUT).getTransferId();
         assertNotNull(out);
-        assertEquals(out, single(FUND_B, OperationType.TRASPASO_IN).getTransferId());
+        assertEquals(out, single(NAME_B, OperationType.TRASPASO_IN).getTransferId());
     }
 
     @Test
@@ -163,7 +169,7 @@ class InversisImportTest {
         assertEquals(1, sales.size(), "el traspaso no puede dejar rastro fiscal");
 
         SaleRecord sale = sales.get(0);
-        assertEquals(FUND_B, sale.getTicker());
+        assertEquals(NAME_B, sale.getTicker());
         assertEquals(LocalDate.of(2025, 3, 20), sale.getSaleDate());
         // Hereda la fecha del fondo de origen, no la del traspaso: la antigüedad viaja con él
         assertEquals(LocalDate.of(2024, 1, 10), sale.getPurchaseDate());
@@ -178,11 +184,11 @@ class InversisImportTest {
     void transferPreservesCost() throws IOException {
         importFixture(ImportMode.ADD);
 
-        // 1000 + 600 aportados al fondo A, más 100 € (125 USD) al fondo C
+        // 1000 + 600 aportados al fondo A, más dos compras de 100 € (125 USD) al fondo C
         BigDecimal contributed = operationRepo.findByUserId(alice).stream()
                 .filter(o -> o.getType() == OperationType.BUY)
                 .map(Operation::getTotal).reduce(BigDecimal.ZERO, BigDecimal::add);
-        assertEquals(0, new BigDecimal("1700.00").compareTo(scale(contributed)));
+        assertEquals(0, new BigDecimal("1800.00").compareTo(scale(contributed)));
 
         BigDecimal openCost = fifoLotRepo.findByUserId(alice).stream()
                 .map(FifoLot::getRemainingCost).reduce(BigDecimal.ZERO, BigDecimal::add);
@@ -198,7 +204,7 @@ class InversisImportTest {
     void transferCarriesLotsAndDates() throws IOException {
         importFixture(ImportMode.ADD);
 
-        List<FifoLot> b = fifoLotRepo.findByUserIdAndTickerOrderByPurchaseDateAscIdAsc(alice, FUND_B);
+        List<FifoLot> b = fifoLotRepo.findByUserIdAndTickerOrderByPurchaseDateAscIdAsc(alice, NAME_B);
         assertEquals(2, b.size(), "un lote por cada fecha de adquisición heredada");
 
         // 120 títulos por 1500 € valen 12,50 cada uno: los 100 del primer lote son 1250 de los
@@ -212,7 +218,7 @@ class InversisImportTest {
         assertEquals(0, new BigDecimal("240.00").compareTo(scale(b.get(1).getInitialCost())));
 
         // Del fondo A queda lo que no se traspasó: 30 títulos del lote de febrero
-        List<FifoLot> a = fifoLotRepo.findByUserIdAndTickerOrderByPurchaseDateAscIdAsc(alice, FUND_A);
+        List<FifoLot> a = fifoLotRepo.findByUserIdAndTickerOrderByPurchaseDateAscIdAsc(alice, NAME_A);
         BigDecimal left = a.stream().map(FifoLot::getRemainingQty)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
         assertEquals(0, new BigDecimal("30").compareTo(left));
@@ -223,9 +229,32 @@ class InversisImportTest {
     void convertsForeignCurrency() throws IOException {
         importFixture(ImportMode.ADD);
 
-        Operation c = single(FUND_C, OperationType.BUY);
-        assertEquals(0, new BigDecimal("100.00").compareTo(scale(c.getTotal())),
-                "125 USD a 1,25 USD/€ son 100 €");
+        for (Operation c : operations(NAME_C)) {
+            assertEquals(0, new BigDecimal("100.00").compareTo(scale(c.getTotal())),
+                    "125 USD a 1,25 USD/€ son 100 €");
+        }
+    }
+
+    @Test
+    @DisplayName("El ticker es el nombre del fondo y el ISIN se guarda aparte")
+    void usesFundNameAsTicker() throws IOException {
+        importFixture(ImportMode.ADD);
+
+        Operation a = operations(NAME_A).get(0);
+        assertEquals(NAME_A, a.getTicker());
+        assertEquals(FUND_A, a.getAssetName(), "el ISIN es lo que sirve para cotizar");
+    }
+
+    @Test
+    @DisplayName("Un fondo renombrado a mitad del fichero sigue siendo una sola posición")
+    void renamedFundStaysOneTicker() throws IOException {
+        importFixture(ImportMode.ADD);
+
+        // Las dos compras del fondo C vienen con nombres distintos; si cada una se quedara con el
+        // suyo habría dos posiciones y cada una haría su propio FIFO.
+        assertEquals(2, operations(NAME_C).size());
+        assertEquals(0, operations("FONDO C IDX P AC USD").size(),
+                "el nombre antiguo no puede quedar como una posición aparte");
     }
 
     @Test
@@ -235,8 +264,8 @@ class InversisImportTest {
         CsvImportResult again = importFixture(ImportMode.ADD);
 
         assertEquals(0, again.operations());
-        assertEquals(6, again.duplicates());
-        assertEquals(6, operationRepo.findByUserId(alice).size());
+        assertEquals(7, again.duplicates());
+        assertEquals(7, operationRepo.findByUserId(alice).size());
     }
 
     @Test

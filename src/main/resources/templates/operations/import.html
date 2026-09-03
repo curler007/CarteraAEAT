@@ -81,8 +81,10 @@
                 <li>Los <strong>traspasos</strong> y los cambios de clase se importan como tales:
                     no tributan, pero llevan al fondo de destino el coste y la antigüedad del de
                     origen. Solo los <strong>reembolsos</strong> llegan a la declaración.</li>
-                <li>El ticker es el <strong>ISIN</strong> del fondo y el broker se rellena como
-                    <code>MyInvestor</code>.</li>
+                <li>El ticker es el <strong>nombre del fondo</strong> y el ISIN se guarda aparte,
+                    que es de donde sale la cotización. Si un fondo aparece con dos nombres a lo
+                    largo del fichero se usa el más reciente, para que no queden dos posiciones
+                    distintas del mismo fondo. El broker se rellena como <code>MyInvestor</code>.</li>
                 <li>Los fondos en divisa se pasan a euros con el <strong>tipo oficial del BCE</strong>
                     de la fecha de la operación. Si no hay conexión para consultarlo, no se importa
                     nada y se te dice qué movimientos faltaban por convertir.</li>

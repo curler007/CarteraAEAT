@@ -152,13 +152,19 @@ public class InversisXlsService {
         }
 
         Map<String, AeatGroup> groupByIsin = new HashMap<>();
+        Map<String, String> tickerByIsin = new HashMap<>();
         Set<String> alreadyImported = new HashSet<>();
         for (Operation op : existing) {
-            groupByIsin.putIfAbsent(op.getAssetName().trim().toUpperCase(), op.getAeatGroup());
+            String isin = op.getAssetName().trim().toUpperCase();
+            groupByIsin.putIfAbsent(isin, op.getAeatGroup());
+            // Si el usuario ya tenía ese fondo, se respeta el nombre con el que lo llamaba: dos
+            // tickers para el mismo ISIN partirían el FIFO en dos posiciones independientes.
+            tickerByIsin.putIfAbsent(isin, op.getTicker());
             if (op.getNotes() != null && op.getNotes().startsWith(NOTE_PREFIX)) {
                 alreadyImported.add(importKey(op.getNotes()));
             }
         }
+        currentNames(movements).forEach(tickerByIsin::putIfAbsent);
 
         List<OperationForm> forms = new ArrayList<>();
         int duplicates = 0;
@@ -167,7 +173,7 @@ public class InversisXlsService {
                 duplicates++;
                 continue;
             }
-            forms.add(agg.toForm(groupByIsin));
+            forms.add(agg.toForm(tickerByIsin, groupByIsin));
         }
 
         return new InversisParseResult(forms, ignored, duplicates,
@@ -227,6 +233,26 @@ public class InversisXlsService {
                 eur.setScale(6, RoundingMode.HALF_UP));
     }
 
+    /**
+     * Nombre vigente de cada fondo: el del movimiento más reciente. El extracto arrastra el
+     * nombre que el fondo tenía en cada momento, y las gestoras los cambian —o el gestor cambia
+     * de criterio al etiquetarlos—, así que quedarse con el último es lo que casa con lo que el
+     * usuario ve hoy en la aplicación del banco.
+     *
+     * <p>Sobre todo, tiene que ser <em>uno solo</em> por ISIN: si el mismo fondo entrase con dos
+     * nombres, quedarían dos posiciones independientes y cada una haría su propio FIFO.
+     */
+    private static Map<String, String> currentNames(List<Movement> movements) {
+        Map<String, Movement> latest = new LinkedHashMap<>();
+        for (Movement m : movements) {
+            latest.merge(m.isin(), m,
+                    (a, b) -> b.date().isBefore(a.date()) ? a : b);
+        }
+        Map<String, String> out = new LinkedHashMap<>();
+        latest.forEach((isin, m) -> out.put(isin, m.name()));
+        return out;
+    }
+
     // ─── Agrupación ──────────────────────────────────────────────────────────
 
     /**
@@ -247,11 +273,13 @@ public class InversisXlsService {
             return DATE.format(date) + ":" + isin + ":" + type.name();
         }
 
-        OperationForm toForm(Map<String, AeatGroup> groupByIsin) {
+        OperationForm toForm(Map<String, String> tickerByIsin, Map<String, AeatGroup> groupByIsin) {
             OperationForm f = new OperationForm();
             f.setDate(date);
             f.setType(type);
-            f.setTicker(isin);
+            // El ticker es el nombre del fondo, que es como lo reconoce el usuario; el ISIN va a
+            // assetName, que es de donde sale la cotización.
+            f.setTicker(tickerByIsin.getOrDefault(isin, isin));
             f.setAssetName(isin);
             f.setBroker(BROKER);
             f.setQuantity(quantity);
