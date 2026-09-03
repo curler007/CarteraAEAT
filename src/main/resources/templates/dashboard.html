@@ -36,7 +36,7 @@
     </div>
 
     <div th:unless="${#lists.isEmpty(portfolio)}" class="row g-3 mb-3">
-        <div class="col-sm-8">
+        <div class="col-lg-5">
             <div class="card text-center shadow-sm h-100">
                 <div class="card-body">
                     <div class="text-muted small text-uppercase">Global</div>
@@ -49,12 +49,43 @@
                 </div>
             </div>
         </div>
-        <div class="col-sm-4">
-            <div class="card text-center shadow-sm h-100">
-                <div class="card-body">
-                    <div class="text-muted small text-uppercase">Hoy</div>
-                    <div class="fs-6 fw-bold" id="today-eur">…</div>
-                    <div class="small fw-semibold" id="today-pct">…</div>
+        <div class="col-lg-7">
+            <div class="row g-3 h-100">
+                <div class="col-6 col-md-3">
+                    <div class="card text-center shadow-sm h-100">
+                        <div class="card-body py-3">
+                            <div class="text-muted small text-uppercase">Hoy</div>
+                            <div class="fs-6 fw-bold" id="today-eur">…</div>
+                            <div class="small fw-semibold" id="today-pct">…</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="card text-center shadow-sm h-100">
+                        <div class="card-body py-3">
+                            <div class="text-muted small text-uppercase">1 semana</div>
+                            <div class="fs-6 fw-bold" id="week-eur">…</div>
+                            <div class="small fw-semibold" id="week-pct">…</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="card text-center shadow-sm h-100">
+                        <div class="card-body py-3">
+                            <div class="text-muted small text-uppercase">1 mes</div>
+                            <div class="fs-6 fw-bold" id="month-eur">…</div>
+                            <div class="small fw-semibold" id="month-pct">…</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="card text-center shadow-sm h-100">
+                        <div class="card-body py-3">
+                            <div class="text-muted small text-uppercase">1 año</div>
+                            <div class="fs-6 fw-bold" id="year-eur">…</div>
+                            <div class="small fw-semibold" id="year-pct">…</div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -86,7 +117,13 @@
                 </thead>
                 <tbody>
                 <tr th:each="item : ${portfolio}"
-                    th:attr="data-isin=${item.assetName()},data-qty=${item.totalQty()},data-cost=${item.totalCost()},data-avg=${item.avgCost()},data-pct-cost=${portfolioPercent[item.ticker()]}">
+                    th:attr="data-isin=${item.assetName()},data-qty=${item.totalQty()},data-cost=${item.totalCost()},data-avg=${item.avgCost()},data-pct-cost=${portfolioPercent[item.ticker()]},
+                             data-held-week=${basisWeek[item.assetName()]?.heldQty() ?: 0},
+                             data-added-week=${basisWeek[item.assetName()]?.addedCost() ?: 0},
+                             data-held-month=${basisMonth[item.assetName()]?.heldQty() ?: 0},
+                             data-added-month=${basisMonth[item.assetName()]?.addedCost() ?: 0},
+                             data-held-year=${basisYear[item.assetName()]?.heldQty() ?: 0},
+                             data-added-year=${basisYear[item.assetName()]?.addedCost() ?: 0}">
                     <td><strong th:text="${item.ticker()}"></strong></td>
                     <td th:text="${item.assetName()}"></td>
                     <td class="text-end" th:text="${#numbers.formatDecimal(item.totalQty(), 1, 4)}"></td>
@@ -235,13 +272,23 @@
     const totalCost = [[${totalCost}]];
 
     let latentTotal = 0;      // plusvalía latente acumulada (€)
-    let dayChange   = 0;      // variación de la última sesión (€)
-    let prevCloseValue = 0;   // valor de la cartera al cierre anterior, solo de las posiciones con cierre conocido
+
+    // Variación por periodo. `base` es el punto de partida: lo que ya se tenía valorado al precio
+    // de aquella fecha más el coste de lo comprado después, de forma que aportar dinero no cuenta
+    // como ganancia. Solo suman las posiciones cuyo precio de referencia conocemos.
+    const periods = {
+        today: { change: 0, base: 0, eur: 'today-eur', pct: 'today-pct' },
+        week:  { change: 0, base: 0, eur: 'week-eur',  pct: 'week-pct'  },
+        month: { change: 0, base: 0, eur: 'month-eur', pct: 'month-pct' },
+        year:  { change: 0, base: 0, eur: 'year-eur',  pct: 'year-pct'  }
+    };
+    Object.values(periods).forEach(p => {
+        p.eurEl = document.getElementById(p.eur);
+        p.pctEl = document.getElementById(p.pct);
+    });
 
     const globalValue = document.getElementById('global-value');
     const globalDelta = document.getElementById('global-delta');
-    const todayEur    = document.getElementById('today-eur');
-    const todayPct    = document.getElementById('today-pct');
 
     // Mismo formato que los importes que pinta Thymeleaf, que quedan justo al lado
     // useGrouping 'always': es-ES no agruparía los millares de 4 dígitos, pero Thymeleaf sí
@@ -259,19 +306,37 @@
         globalDelta.style.color = c;
     }
 
-    function renderToday() {
-        if (prevCloseValue <= 0) {
-            todayEur.textContent = '—';
-            todayPct.textContent = '';
-            todayEur.classList.add('text-muted');
-            return;
-        }
-        const c = dayChange >= 0 ? GREEN : RED;
-        todayEur.textContent = signedEur(dayChange);
-        todayEur.style.color = c;
-        todayEur.classList.remove('text-muted');
-        todayPct.textContent = '(' + signedPct(dayChange / prevCloseValue * 100) + ')';
-        todayPct.style.color = c;
+    function renderPeriods() {
+        Object.values(periods).forEach(p => {
+            if (p.base <= 0) {
+                p.eurEl.textContent = '—';
+                p.pctEl.textContent = '';
+                p.eurEl.classList.add('text-muted');
+                p.eurEl.style.color = '';
+                return;
+            }
+            const c = p.change >= 0 ? GREEN : RED;
+            p.eurEl.textContent = signedEur(p.change);
+            p.eurEl.style.color = c;
+            p.eurEl.classList.remove('text-muted');
+            p.pctEl.textContent = '(' + signedPct(p.change / p.base * 100) + ')';
+            p.pctEl.style.color = c;
+        });
+    }
+
+    /**
+     * Suma esta posición a un periodo. El punto de partida son los títulos que ya se tenían,
+     * valorados al cierre de aquella fecha, más lo que costó lo comprado después. Si el valor no
+     * cotizaba entonces no hay precio de referencia y se parte de su coste completo.
+     */
+    function addPeriod(period, refPrice, heldQty, addedCost, currentValue, positionCost) {
+        const held  = parseFloat(heldQty   || '0');
+        const added = parseFloat(addedCost || '0');
+        // Sin cierre de referencia el valor no cotizaba entonces: se parte de lo que costó
+        const base = refPrice != null ? held * refPrice + added : positionCost;
+        if (!(base > 0)) return;
+        period.base   += base;
+        period.change += currentValue - base;
     }
 
     function color(cell, value) {
@@ -319,14 +384,19 @@
                 latentTotal += euros;
                 renderGlobal();
 
-                // Variación de la última sesión: solo suman las posiciones cuyo cierre anterior conocemos
-                if (q.previousClose != null) {
-                    prevCloseValue += qty * q.previousClose;
-                    dayChange      += qty * (price - q.previousClose);
-                    renderToday();
-                }
-
                 const currentValue = qty * price;
+
+                // Variación de la última sesión: la cartera de ayer era la de hoy, así que basta
+                // con valorarla al cierre anterior.
+                if (q.previousClose != null) {
+                    periods.today.base   += qty * q.previousClose;
+                    periods.today.change += currentValue - qty * q.previousClose;
+                }
+                addPeriod(periods.week,  q.closeWeek,  row.dataset.heldWeek,  row.dataset.addedWeek,  currentValue, totalCost);
+                addPeriod(periods.month, q.closeMonth, row.dataset.heldMonth, row.dataset.addedMonth, currentValue, totalCost);
+                addPeriod(periods.year,  q.closeYear,  row.dataset.heldYear,  row.dataset.addedYear,  currentValue, totalCost);
+                renderPeriods();
+
                 cellValue.textContent = currentValue.toFixed(2) + ' €';
                 color(cellValue, currentValue - totalCost);
 
@@ -346,7 +416,7 @@
     Promise.all(rowPromises).then(() => {
         // Estado final: deja los resúmenes cerrados aunque ninguna cotización se haya resuelto
         renderGlobal();
-        renderToday();
+        renderPeriods();
 
         let totalValue = 0;
         rowCurrentValue.forEach(v => { totalValue += v; });

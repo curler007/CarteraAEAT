@@ -10,6 +10,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
 import java.math.BigDecimal;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -23,8 +26,11 @@ public class QuoteService {
             "https://query2.finance.yahoo.com/v1/finance/search?q=%s&quotesCount=1&newsCount=0";
     private static final String CHART_URL =
             "https://query1.finance.yahoo.com/v8/finance/chart/%s?%s";
-    /** Query del chart para cotizaciones: la ventana de 5 dias da el cierre de la sesion anterior */
-    private static final String QUOTE_CHART_QUERY = "interval=1d&range=5d";
+    /**
+     * Query del chart para cotizaciones. La ventana de un año da, en una sola llamada, el cierre
+     * de la sesión anterior y los de hace una semana, un mes y un año.
+     */
+    private static final String QUOTE_CHART_QUERY = "interval=1d&range=1y";
 
     /** ISINs no estándar que Yahoo Finance no reconoce → símbolo preferido en EUR, fallback en USD */
     private static final Map<String, String[]> ISIN_SYMBOL_OVERRIDE = Map.of(
@@ -126,15 +132,19 @@ public class QuoteService {
         String currency = meta.path("currency").asText("EUR");
 
         // GBp = peniques británicos → convertir a GBP dividiendo entre 100
-        if ("GBp".equals(currency) || "GBX".equals(currency)) {
+        boolean pence = "GBp".equals(currency) || "GBX".equals(currency);
+        if (pence) {
             raw = raw / 100.0;
             if (prevRaw != null) prevRaw = prevRaw / 100.0;
             currency = "GBP";
         }
 
+        References refs = references(result).divideBy(pence ? 100 : 1);
+
         if ("EUR".equals(currency)) {
             log.debug("Precio ya en EUR, no se necesita conversión: {} {} → EUR", raw, symbol);
-            return Optional.of(new QuoteResult(symbol, BigDecimal.valueOf(raw), toDecimal(prevRaw), "EUR", false));
+            return Optional.of(new QuoteResult(symbol, BigDecimal.valueOf(raw), toDecimal(prevRaw),
+                    refs.week(), refs.month(), refs.year(), "EUR", false));
         }
 
         // Convertir a EUR via Yahoo Finance forex (ej: USDEUR=X)
@@ -142,7 +152,8 @@ public class QuoteService {
         if (eurRate == null) {
             // Devolvemos el precio en divisa original; el frontend mostrará solo el precio
             log.debug("No se pudo obtener tipo de cambio {}EUR, devolviendo precio sin convertir: {} {}", currency, raw, symbol);
-            return Optional.of(new QuoteResult(symbol, BigDecimal.valueOf(raw), toDecimal(prevRaw), currency, false));
+            return Optional.of(new QuoteResult(symbol, BigDecimal.valueOf(raw), toDecimal(prevRaw),
+                    refs.week(), refs.month(), refs.year(), currency, false));
         }
 
         // Ambos precios se convierten al cambio de hoy: la variación diaria refleja así el
@@ -150,7 +161,53 @@ public class QuoteService {
         BigDecimal priceEur = toEur(BigDecimal.valueOf(raw), eurRate);
         BigDecimal prevEur = prevRaw == null ? null : toEur(BigDecimal.valueOf(prevRaw), eurRate);
         log.debug("Precio convertido a EUR usando tipo de cambio {}EUR = {}: {} {} → {} EUR", currency, eurRate, raw, symbol, priceEur);
-        return Optional.of(new QuoteResult(symbol, priceEur, prevEur, currency, true));
+        return Optional.of(new QuoteResult(symbol, priceEur, prevEur,
+                toEurOrNull(refs.week(), eurRate), toEurOrNull(refs.month(), eurRate),
+                toEurOrNull(refs.year(), eurRate), currency, true));
+    }
+
+    /** Cierres de referencia de los periodos que muestra el dashboard, en divisa original. */
+    private record References(BigDecimal week, BigDecimal month, BigDecimal year) {
+        References divideBy(int divisor) {
+            if (divisor == 1) return this;
+            BigDecimal d = BigDecimal.valueOf(divisor);
+            return new References(split(week, d), split(month, d), split(year, d));
+        }
+
+        private static BigDecimal split(BigDecimal v, BigDecimal d) {
+            return v == null ? null : v.divide(d, 6, java.math.RoundingMode.HALF_UP);
+        }
+    }
+
+    private References references(JsonNode result) {
+        LocalDate today = LocalDate.now();
+        return new References(
+                closeOn(result, today.minusWeeks(1)),
+                closeOn(result, today.minusMonths(1)),
+                closeOn(result, today.minusYears(1)));
+    }
+
+    /**
+     * Último cierre publicado en {@code target} o antes. Devuelve null si la serie empieza más
+     * tarde: el valor no cotizaba entonces y ese periodo no tiene referencia de mercado.
+     */
+    private BigDecimal closeOn(JsonNode result, LocalDate target) {
+        JsonNode stamps = result.path("timestamp");
+        JsonNode closes = result.path("indicators").path("quote").path(0).path("close");
+        BigDecimal last = null;
+        for (int i = 0; i < stamps.size() && i < closes.size(); i++) {
+            LocalDate day = Instant.ofEpochSecond(stamps.get(i).asLong())
+                    .atZone(ZoneOffset.UTC).toLocalDate();
+            if (day.isAfter(target)) break;
+            if (closes.get(i).isNumber() && closes.get(i).asDouble() > 0) {
+                last = BigDecimal.valueOf(closes.get(i).asDouble());
+            }
+        }
+        return last;
+    }
+
+    private BigDecimal toEurOrNull(BigDecimal amount, BigDecimal eurRate) {
+        return amount == null ? null : toEur(amount, eurRate);
     }
 
     private BigDecimal toEur(BigDecimal amount, BigDecimal eurRate) {

@@ -127,6 +127,18 @@ public class OperationController {
         model.addAttribute("totalCost", totalCost);
         model.addAttribute("salesByYear", salesByYear);
         model.addAttribute("unvalued", unvaluedOperations(uid));
+
+        // Punto de partida de cada periodo de la cabecera, por ISIN
+        java.time.LocalDate today = java.time.LocalDate.now();
+        List<com.raul.bolsa.domain.FifoLot> openLots = fifoLotRepo.findByUserId(uid).stream()
+                .filter(l -> l.getRemainingQty().signum() > 0)
+                .toList();
+        model.addAttribute("basisWeek",
+                com.raul.bolsa.web.dto.PeriodBasis.byIsin(openLots, today.minusWeeks(1)));
+        model.addAttribute("basisMonth",
+                com.raul.bolsa.web.dto.PeriodBasis.byIsin(openLots, today.minusMonths(1)));
+        model.addAttribute("basisYear",
+                com.raul.bolsa.web.dto.PeriodBasis.byIsin(openLots, today.minusYears(1)));
         return "dashboard";
     }
 
