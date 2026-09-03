@@ -46,9 +46,11 @@ public class OperationCsvController {
     @GetMapping("/operations/import/ejemplo.csv")
     public ResponseEntity<byte[]> sample() {
         String sample = "﻿" + OperationCsvService.HEADER + "\n"
-                + "05/08/2025;BUY;APPLE;US0378331005;Trade Republic;2,826455;501;1;GROUP_3;\n"
-                + "14/08/2025;SELL;APPLE;US0378331005;Trade Republic;1,5;300,25;1;GROUP_3;venta parcial\n"
-                + "10/06/2024;SPLIT;NVIDIA;;;10;;;;split 1:10\n";
+                + "05/08/2025;BUY;APPLE;US0378331005;Trade Republic;2,826455;501;1;GROUP_3;;\n"
+                + "14/08/2025;SELL;APPLE;US0378331005;Trade Republic;1,5;300,25;1;GROUP_3;venta parcial;\n"
+                + "10/06/2024;SPLIT;NVIDIA;;;10;;;;split 1:10;\n"
+                + "06/03/2026;TRASPASO_OUT;IE00BYX5MD61;IE00BYX5MD61;MyInvestor;12,5;110,4;0;GROUP_2;;T1\n"
+                + "09/03/2026;TRASPASO_IN;IE000N4ZYX28;IE000N4ZYX28;MyInvestor;9,87;110,4;0;GROUP_2;;T1\n";
         return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"ejemplo_operaciones.csv\"")
                 .contentType(MediaType.parseMediaType("text/csv; charset=UTF-8"))
@@ -115,6 +117,9 @@ public class OperationCsvController {
         if (!result.pendingValuation().isEmpty()) {
             msg.append(String.format(" %d entraron sin coste y hay que valorarlas.",
                     result.pendingValuation().size()));
+        }
+        if (!result.warnings().isEmpty()) {
+            msg.append(" Aviso: ").append(String.join("; ", result.warnings())).append('.');
         }
         flash.addFlashAttribute("success", msg.toString());
         return "redirect:/operations";

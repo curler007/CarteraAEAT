@@ -114,6 +114,10 @@
                                    placeholder="DCA mensual, split, etc."/>
                         </div>
 
+                        <!-- Empareja las dos patas de un traspaso. Se conserva al editar: sin
+                             ella el fondo de destino perdería el coste heredado del origen. -->
+                        <input type="hidden" th:field="*{transferId}"/>
+
                         <div class="d-flex gap-2 justify-content-end">
                             <a href="/operations" class="btn btn-outline-secondary">Cancelar</a>
                             <button type="submit" class="btn btn-success">

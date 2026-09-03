@@ -25,6 +25,15 @@ public interface FifoLotRepository extends JpaRepository<FifoLot, Long> {
 
     Optional<FifoLot> findByOperation_Id(Long operationId);
 
+    /**
+     * Un {@code TRASPASO_IN} genera un lote por cada fecha de adquisición que hereda del origen,
+     * así que es el único tipo con más de un lote por operación.
+     */
+    List<FifoLot> findAllByOperation_Id(Long operationId);
+
+    /** Lotes del usuario en orden cronológico global, para el replay de toda la cartera. */
+    List<FifoLot> findByUserIdOrderByPurchaseDateAscIdAsc(Long userId);
+
     void deleteByUserId(Long userId);
 
     /**

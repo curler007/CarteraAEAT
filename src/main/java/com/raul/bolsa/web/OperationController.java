@@ -206,7 +206,7 @@ public class OperationController {
             BigDecimal factor = splitService.cumulativeFactor(tickerSplits, op.getDate(), today);
             BigDecimal adjustedQty = op.getQuantity().multiply(factor);
             BigDecimal current = runningByTicker.getOrDefault(ticker, BigDecimal.ZERO);
-            current = op.getType() == OperationType.SELL
+            current = op.getType().reducesPosition()
                     ? current.subtract(adjustedQty)
                     : current.add(adjustedQty);
             runningByTicker.put(ticker, current);
@@ -362,6 +362,7 @@ public class OperationController {
         f.setCommission(op.getCommission());
         f.setAeatGroup(op.getAeatGroup());
         f.setNotes(op.getNotes());
+        f.setTransferId(op.getTransferId());
         return f;
     }
 

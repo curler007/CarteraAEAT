@@ -46,4 +46,7 @@ public class OperationForm {
     private AeatGroup aeatGroup = AeatGroup.GROUP_2;
 
     private String notes;
+
+    /** Empareja las dos patas de un traspaso entre fondos; null en el resto de operaciones. */
+    private String transferId;
 }

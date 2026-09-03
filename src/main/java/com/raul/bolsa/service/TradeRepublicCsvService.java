@@ -78,15 +78,6 @@ public class TradeRepublicCsvService {
      */
     private static final Map<String, String> CRYPTO_ISIN = Map.of("BTC", "XF000BTC0017");
 
-    /**
-     * Prefijo de país del ISIN → grupo AEAT, para valores que el usuario aún no tiene.
-     * Solo se aplica como último recurso: si ya hay operaciones de ese ISIN se hereda su grupo.
-     */
-    private static final Set<String> EUROPEAN = Set.of(
-            "AT", "BE", "BG", "CH", "CY", "CZ", "DE", "DK", "EE", "FI", "FR", "GB", "GR", "HR",
-            "HU", "IE", "IS", "IT", "LI", "LT", "LU", "LV", "MT", "NL", "NO", "PL", "PT", "RO",
-            "SE", "SI", "SK", "XF");
-
     /** ¿La cabecera es la de una exportación de Trade Republic? */
     public static boolean matches(List<String> header) {
         List<String> lower = header.stream().map(h -> h.trim().toLowerCase()).toList();
@@ -209,7 +200,7 @@ public class TradeRepublicCsvService {
         f.setQuantity(shares);
         f.setTotal(total);
         f.setCommission(fee);
-        f.setAeatGroup(groupByIsin.computeIfAbsent(isin, TradeRepublicCsvService::inferGroup));
+        f.setAeatGroup(groupByIsin.computeIfAbsent(isin, AeatGroup::forIsin));
         f.setNotes(note(txId, freeReceipt));
         return f;
     }
@@ -245,13 +236,6 @@ public class TradeRepublicCsvService {
         String s = symbol.trim().toUpperCase();
         if (s.isEmpty()) throw new IllegalArgumentException("falta el ISIN del valor.");
         return CRYPTO_ISIN.getOrDefault(s, s);
-    }
-
-    /** Grupo AEAT aproximado por el país del ISIN, para valores nuevos. */
-    private static AeatGroup inferGroup(String isin) {
-        String country = isin.length() >= 2 ? isin.substring(0, 2) : "";
-        if ("ES".equals(country)) return AeatGroup.GROUP_1;
-        return EUROPEAN.contains(country) ? AeatGroup.GROUP_2 : AeatGroup.GROUP_3;
     }
 
     /** Movimientos que sí cambian la posición: compraventas y entregas gratuitas. */

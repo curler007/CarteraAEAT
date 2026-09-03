@@ -9,6 +9,7 @@ import com.raul.bolsa.repository.OperationRepository;
 import com.raul.bolsa.repository.SaleRecordRepository;
 import com.raul.bolsa.repository.SplitRepository;
 import com.raul.bolsa.web.dto.CsvImportResult;
+import com.raul.bolsa.web.dto.InversisParseResult;
 import com.raul.bolsa.web.dto.ImportMode;
 import com.raul.bolsa.web.dto.OperationForm;
 import com.raul.bolsa.web.dto.SplitForm;
@@ -44,18 +45,25 @@ import java.util.Map;
 public class OperationCsvService {
 
     public static final String HEADER =
-            "Fecha;Tipo;Ticker;ISIN;Broker;Cantidad;Total;Comision;Grupo AEAT;Notas";
+            "Fecha;Tipo;Ticker;ISIN;Broker;Cantidad;Total;Comision;Grupo AEAT;Notas;Traspaso";
 
     private static final byte[] BOM = {(byte) 0xEF, (byte) 0xBB, (byte) 0xBF};
     private static final DateTimeFormatter OUT_DATE = DateTimeFormatter.ofPattern("dd/MM/yyyy");
     private static final char SEP = ';';
-    private static final int COLUMNS = 10;
+
+    /**
+     * La columna {@code Traspaso} se añadió después, así que un fichero exportado antes trae diez
+     * columnas y sigue siendo válido: sin traspasos no hay nada que emparejar.
+     */
+    private static final int COLUMNS_MIN = 10;
+    private static final int COLUMNS = 11;
 
     /** Tipo reservado para las filas de split; el resto son valores de OperationType. */
     private static final String SPLIT = "SPLIT";
 
     public static final String FORMAT_OWN = "formato propio";
     public static final String FORMAT_TRADE_REPUBLIC = "Trade Republic";
+    public static final String FORMAT_INVERSIS = "MyInvestor";
 
     private final OperationRepository operationRepo;
     private final SplitRepository splitRepo;
@@ -64,6 +72,8 @@ public class OperationCsvService {
     private final OperationService operationService;
     private final SplitService splitService;
     private final TradeRepublicCsvService tradeRepublicService;
+    private final InversisXlsService inversisService;
+    private final FifoService fifoService;
 
     // ─── Exportación ─────────────────────────────────────────────────────────
 
@@ -82,13 +92,14 @@ public class OperationCsvService {
                     op.getType() == OperationType.CANJE ? "" : num(op.getTotal()),
                     op.getType() == OperationType.CANJE ? "" : num(op.getCommission()),
                     op.getAeatGroup().name(),
-                    op.getNotes()
+                    op.getNotes(),
+                    op.getTransferId()
             });
         }
         for (Split s : splitRepo.findByUserId(userId)) {
             rows.add(new String[]{
                     OUT_DATE.format(s.getDate()), SPLIT, s.getTicker(),
-                    "", "", num(s.getRatio()), "", "", "", ""
+                    "", "", num(s.getRatio()), "", "", "", "", ""
             });
         }
 
@@ -122,6 +133,11 @@ public class OperationCsvService {
      */
     @Transactional
     public CsvImportResult importCsv(Long userId, byte[] content, ImportMode mode) {
+        // Antes de decodificar: el extracto de MyInvestor no es texto UTF-8 ni es un CSV.
+        if (InversisXlsService.matches(content)) {
+            return importInversis(userId, content, mode);
+        }
+
         String text = stripBom(new String(content, StandardCharsets.UTF_8));
 
         List<List<String>> tradeRepublicRows = parse(text, TradeRepublicCsvService.separator());
@@ -148,7 +164,7 @@ public class OperationCsvService {
             List<String> row = rows.get(i);
             int line = i + 1;
             if (row.stream().allMatch(String::isBlank)) continue;  // línea en blanco
-            if (row.size() != COLUMNS) {
+            if (row.size() < COLUMNS_MIN || row.size() > COLUMNS) {
                 errors.add("Línea " + line + ": se esperaban " + COLUMNS
                         + " columnas separadas por ';' y hay " + row.size() + ".");
                 continue;
@@ -181,7 +197,7 @@ public class OperationCsvService {
         log.info("Importadas {} operaciones y {} splits para el usuario {} (modo {})",
                 operations.size(), splits.size(), userId, mode);
         return new CsvImportResult(FORMAT_OWN, operations.size(), splits.size(),
-                Map.of(), 0, List.of(), List.of());
+                Map.of(), 0, List.of(), List.of(), List.of());
     }
 
     // ─── Importación de Trade Republic ───────────────────────────────────────
@@ -206,7 +222,7 @@ public class OperationCsvService {
         // nuevos, y el usuario no tiene nada que corregir.
         if (parsed.operations().isEmpty() && parsed.duplicates() > 0) {
             return new CsvImportResult(FORMAT_TRADE_REPUBLIC, 0, 0,
-                    parsed.ignored(), parsed.duplicates(), List.of(), List.of());
+                    parsed.ignored(), parsed.duplicates(), List.of(), List.of(), List.of());
         }
         if (parsed.operations().isEmpty()) {
             return CsvImportResult.failed(
@@ -225,7 +241,53 @@ public class OperationCsvService {
                         + "(modo {}, {} movimientos ignorados, {} duplicados)",
                 operations.size(), userId, mode, parsed.ignoredCount(), parsed.duplicates());
         return new CsvImportResult(FORMAT_TRADE_REPUBLIC, operations.size(), 0,
-                parsed.ignored(), parsed.duplicates(), parsed.pendingValuation(), List.of());
+                parsed.ignored(), parsed.duplicates(), parsed.pendingValuation(),
+                List.of(), List.of());
+    }
+
+    // ─── Importación de MyInvestor (Inversis) ────────────────────────────────
+
+    /**
+     * El extracto trae el histórico completo de la cartera, así que reimportarlo es lo normal:
+     * lo que ya está cargado se reconoce y se omite.
+     *
+     * <p>Las operaciones se dan de alta sin tocar el FIFO y se recalcula una sola vez al final.
+     * Con traspasos de por medio no hay alternativa: el coste de un fondo de destino sale de los
+     * lotes del de origen, así que hasta que no está el evento entero cargado no hay nada que
+     * calcular que signifique algo.
+     */
+    private CsvImportResult importInversis(Long userId, byte[] content, ImportMode mode) {
+        List<Operation> existing = mode == ImportMode.REPLACE
+                ? List.of()
+                : operationRepo.findByUserId(userId);
+
+        InversisParseResult parsed = inversisService.parse(content, existing);
+
+        if (!parsed.errors().isEmpty()) {
+            return CsvImportResult.failed(parsed.errors());
+        }
+        // Que no haya nada nuevo no es un error: es lo que pasa al reimportar sin movimientos
+        // nuevos, y el usuario no tiene nada que corregir.
+        if (parsed.operations().isEmpty()) {
+            return new CsvImportResult(FORMAT_INVERSIS, 0, 0,
+                    parsed.ignored(), parsed.duplicates(), List.of(), List.of(), List.of());
+        }
+
+        if (mode == ImportMode.REPLACE) {
+            deleteEverythingOf(userId);
+        }
+
+        List<OperationForm> operations = new ArrayList<>(parsed.operations());
+        operations.sort(Comparator.comparing(OperationForm::getDate));
+        operations.forEach(f -> operationService.saveDeferred(userId, f));
+        fifoService.recalculateAll(userId);
+
+        log.info("Importadas {} operaciones de MyInvestor para el usuario {} "
+                        + "(modo {}, {} movimientos ignorados, {} duplicados)",
+                operations.size(), userId, mode, parsed.ignoredCount(), parsed.duplicates());
+        return new CsvImportResult(FORMAT_INVERSIS, operations.size(), 0,
+                parsed.ignored(), parsed.duplicates(), List.of(),
+                parsed.orphanTransfers(), List.of());
     }
 
     private void deleteEverythingOf(Long userId) {
@@ -254,7 +316,8 @@ public class OperationCsvService {
             opType = OperationType.valueOf(type);
         } catch (IllegalArgumentException e) {
             throw new IllegalArgumentException(
-                    "Tipo '" + row.get(1).trim() + "' no válido. Use BUY, SELL, CANJE o SPLIT.");
+                    "Tipo '" + row.get(1).trim() + "' no válido. Use BUY, SELL, CANJE, "
+                            + "TRASPASO_OUT, TRASPASO_IN o SPLIT.");
         }
 
         OperationForm f = new OperationForm();
@@ -266,6 +329,7 @@ public class OperationCsvService {
         f.setQuantity(positive(row.get(5), "Cantidad"));
         f.setAeatGroup(aeatGroup(row.get(8)));
         f.setNotes(blankToNull(row.get(9)));
+        f.setTransferId(row.size() > 10 ? blankToNull(row.get(10)) : null);
 
         if (opType == OperationType.CANJE) {
             // Acciones liberadas: sin coste ni comisión (LIRPF Art. 37.1.a)
