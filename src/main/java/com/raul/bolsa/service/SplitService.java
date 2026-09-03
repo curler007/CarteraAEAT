@@ -44,14 +44,23 @@ public class SplitService {
 
     @Transactional
     public Split save(Long userId, SplitForm form) {
+        Split split = saveWithoutRecalc(userId, form);
+        fifoService.recalculateFifo(userId, split.getTicker());
+        return split;
+    }
+
+    /**
+     * Registra el split sin tocar el FIFO. Solo para cargas masivas, que recalculan una vez al
+     * final; quien la use está obligado a hacerlo.
+     */
+    @Transactional
+    public Split saveWithoutRecalc(Long userId, SplitForm form) {
         Split split = new Split();
         split.setUserId(userId);
         split.setTicker(form.getTicker().trim().toUpperCase());
         split.setDate(form.getDate());
         split.setRatio(form.getRatio());
-        split = splitRepo.save(split);
-        fifoService.recalculateFifo(userId, split.getTicker());
-        return split;
+        return splitRepo.save(split);
     }
 
     @Transactional

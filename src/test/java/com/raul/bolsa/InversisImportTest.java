@@ -240,6 +240,22 @@ class InversisImportTest {
     }
 
     @Test
+    @DisplayName("Exportar al CSV propio y reimportar conserva los traspasos")
+    void survivesOwnCsvRoundTrip() throws IOException {
+        importFixture(ImportMode.ADD);
+        String before = snapshot();
+
+        byte[] exported = csvService.export(alice);
+        CsvImportResult back = csvService.importCsv(alice, exported, ImportMode.REPLACE);
+
+        assertEquals(List.of(), back.errors());
+        assertEquals(OperationCsvService.FORMAT_OWN, back.format());
+        // Sin la columna que empareja las patas, el fondo de destino perdería el coste heredado
+        // y el FIFO saldría distinto: es justo lo que comprueba la huella.
+        assertEquals(before, snapshot());
+    }
+
+    @Test
     @DisplayName("Recalcular la cartera entera deja el mismo resultado")
     void replayIsStable() throws IOException {
         importFixture(ImportMode.ADD);

@@ -190,9 +190,19 @@ public class OperationCsvService {
         // Las operaciones primero y los splits después, en orden cronológico: es el mismo
         // camino que valida ReplayConsistencyTest.
         operations.sort(Comparator.comparing(OperationForm::getDate));
-        operations.forEach(f -> operationService.save(userId, f));
-        splits.sort(Comparator.comparing(SplitForm::getDate));
-        splits.forEach(f -> splitService.save(userId, f));
+        // Con traspasos de por medio cada alta recalcularía la cartera entera, así que el fichero
+        // se carga de una vez y se recalcula al final. Sin ellos se conserva el alta operación a
+        // operación, que resuelve el FIFO por valor y no hace falta tocar.
+        if (operations.stream().anyMatch(f -> f.getType().isTransfer())) {
+            operations.forEach(f -> operationService.saveDeferred(userId, f));
+            splits.sort(Comparator.comparing(SplitForm::getDate));
+            splits.forEach(f -> splitService.saveWithoutRecalc(userId, f));
+            fifoService.recalculateAll(userId);
+        } else {
+            operations.forEach(f -> operationService.save(userId, f));
+            splits.sort(Comparator.comparing(SplitForm::getDate));
+            splits.forEach(f -> splitService.save(userId, f));
+        }
 
         log.info("Importadas {} operaciones y {} splits para el usuario {} (modo {})",
                 operations.size(), splits.size(), userId, mode);

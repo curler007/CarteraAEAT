@@ -200,10 +200,14 @@ class ReplayConsistencyTest {
     }
 
     private static boolean hasUserColumn(Connection ref, String table) throws Exception {
+        return hasColumn(ref, table, "user_id");
+    }
+
+    private static boolean hasColumn(Connection ref, String table, String column) throws Exception {
         try (Statement s = ref.createStatement();
              ResultSet rs = s.executeQuery("PRAGMA table_info(" + table + ")")) {
             while (rs.next()) {
-                if ("user_id".equals(rs.getString("name"))) return true;
+                if (column.equals(rs.getString("name"))) return true;
             }
         }
         return false;
@@ -226,8 +230,12 @@ class ReplayConsistencyTest {
 
     private static List<OpRow> loadOps(Connection ref, Long userId) throws Exception {
         List<OpRow> out = new ArrayList<>();
+        // Las BD anteriores a los traspasos no tienen la columna; se replayan igual.
+        boolean transfers = hasColumn(ref, "operations", "transfer_id");
         String sql = "SELECT id, date, broker, type, ticker, asset_name, quantity, " +
-                "total, commission, aeat_group, notes FROM operations" + filter(ref, "operations");
+                "total, commission, aeat_group, notes"
+                + (transfers ? ", transfer_id" : "")
+                + " FROM operations" + filter(ref, "operations");
         try (PreparedStatement s = prepare(ref, sql, userId); ResultSet rs = s.executeQuery()) {
             while (rs.next()) {
                 out.add(new OpRow(
@@ -241,7 +249,8 @@ class ReplayConsistencyTest {
                         rs.getBigDecimal("total"),
                         rs.getBigDecimal("commission"),
                         AeatGroup.valueOf(rs.getString("aeat_group")),
-                        rs.getString("notes")
+                        rs.getString("notes"),
+                        transfers ? rs.getString("transfer_id") : null
                 ));
             }
         }
@@ -327,7 +336,7 @@ class ReplayConsistencyTest {
     private record OpRow(
             long id, LocalDate date, String broker, OperationType type,
             String ticker, String assetName, BigDecimal quantity, BigDecimal total,
-            BigDecimal commission, AeatGroup aeatGroup, String notes
+            BigDecimal commission, AeatGroup aeatGroup, String notes, String transferId
     ) {
         OperationForm toForm() {
             OperationForm f = new OperationForm();
@@ -341,6 +350,7 @@ class ReplayConsistencyTest {
             f.setCommission(commission != null ? commission : BigDecimal.ZERO);
             f.setAeatGroup(aeatGroup);
             f.setNotes(notes);
+            f.setTransferId(transferId);
             return f;
         }
     }
