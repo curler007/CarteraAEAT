@@ -61,6 +61,8 @@ public class LegacyDataMigration implements ApplicationRunner {
         admin.setPasswordHash(passwordEncoder.encode(seedPassword));
         admin.setRole(Role.ADMIN);
         admin.setEnabled(true);
+        // La contraseña semilla está en claro en application.properties: no puede quedarse.
+        admin.setMustChangePassword(true);
         admin = userRepo.save(admin);
         log.info("Creado el administrador inicial '{}' a partir de application.properties", seedUsername);
         return admin;

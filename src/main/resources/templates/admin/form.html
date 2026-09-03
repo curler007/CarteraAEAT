@@ -37,6 +37,18 @@
                     <div class="invalid-feedback" th:errors="*{password}"></div>
                 </div>
 
+                <div class="form-check mb-3">
+                    <input type="checkbox" class="form-check-input" id="mustChangePassword"
+                           th:field="*{mustChangePassword}"/>
+                    <label class="form-check-label" for="mustChangePassword">
+                        Obligar a cambiar la contraseña en el primer acceso
+                    </label>
+                    <div class="form-text">
+                        No podrá usar la aplicación hasta elegir una contraseña propia.
+                        <span th:if="${editId != null}">Solo se aplica si escribes una contraseña nueva.</span>
+                    </div>
+                </div>
+
                 <div class="mb-3">
                     <label class="form-label">Rol</label>
                     <select class="form-select" th:field="*{role}">

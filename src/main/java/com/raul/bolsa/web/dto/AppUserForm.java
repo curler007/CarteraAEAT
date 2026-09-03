@@ -26,4 +26,7 @@ public class AppUserForm {
     private Role role = Role.USER;
 
     private boolean enabled = true;
+
+    /** Por defecto la contraseña que escribe el administrador es provisional. */
+    private boolean mustChangePassword = true;
 }

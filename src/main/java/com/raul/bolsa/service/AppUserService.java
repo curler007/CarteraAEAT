@@ -57,6 +57,7 @@ public class AppUserService {
         user.setPasswordHash(passwordEncoder.encode(form.getPassword()));
         user.setRole(form.getRole());
         user.setEnabled(form.isEnabled());
+        user.setMustChangePassword(form.isMustChangePassword());
         user = userRepo.save(user);
         log.info("Usuario '{}' creado con rol {}", username, form.getRole());
         return user;
@@ -85,10 +86,39 @@ public class AppUserService {
         user.setUsername(username);
         user.setRole(form.getRole());
         user.setEnabled(form.isEnabled());
+        // El flag solo se toca al restablecer la contraseña: si el admin no escribe una nueva,
+        // el usuario conserva la suya y no hay nada que obligarle a cambiar.
         if (form.getPassword() != null && !form.getPassword().isBlank()) {
             user.setPasswordHash(passwordEncoder.encode(form.getPassword()));
+            user.setMustChangePassword(form.isMustChangePassword());
             log.info("Contraseña restablecida para '{}'", username);
         }
+        return userRepo.save(user);
+    }
+
+    /**
+     * Cambio de contraseña por el propio usuario, que es la única vía para levantar el
+     * {@code mustChangePassword}.
+     */
+    @Transactional
+    public AppUser changeOwnPassword(Long userId, String currentPassword, String newPassword) {
+        AppUser user = require(userId);
+
+        // En el cambio voluntario exigimos la contraseña actual, para que una sesión abierta
+        // y desatendida no baste para apropiarse de la cuenta. En el cambio forzado no aporta
+        // nada: el usuario acaba de teclearla en el login.
+        if (!user.isMustChangePassword()
+                && !passwordEncoder.matches(
+                        currentPassword == null ? "" : currentPassword, user.getPasswordHash())) {
+            throw new IllegalStateException("La contraseña actual no es correcta.");
+        }
+        if (passwordEncoder.matches(newPassword, user.getPasswordHash())) {
+            throw new IllegalStateException("La nueva contraseña debe ser distinta de la actual.");
+        }
+
+        user.setPasswordHash(passwordEncoder.encode(newPassword));
+        user.setMustChangePassword(false);
+        log.info("El usuario '{}' ha cambiado su contraseña", user.getUsername());
         return userRepo.save(user);
     }
 

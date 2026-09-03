@@ -23,6 +23,8 @@ public class AppUserPrincipal implements UserDetails {
     private final String password;
     private final boolean enabled;
     private final Role role;
+    /** Mientras esté a true, {@link MustChangePasswordFilter} no deja navegar a ningún sitio. */
+    private final boolean mustChangePassword;
 
     public AppUserPrincipal(AppUser user) {
         this.id = user.getId();
@@ -30,6 +32,7 @@ public class AppUserPrincipal implements UserDetails {
         this.password = user.getPasswordHash();
         this.enabled = user.isEnabled();
         this.role = user.getRole();
+        this.mustChangePassword = user.isMustChangePassword();
     }
 
     @Override

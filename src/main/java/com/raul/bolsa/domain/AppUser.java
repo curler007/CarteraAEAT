@@ -35,6 +35,17 @@ public class AppUser {
     @Column(nullable = false, columnDefinition = "TEXT")
     private Role role = Role.USER;
 
+    /**
+     * Contraseña puesta por un administrador: el usuario debe cambiarla antes de poder
+     * usar la aplicación.
+     *
+     * <p>El {@code default 0} del columnDefinition no es cosmético: {@code ddl-auto=update}
+     * añade la columna con ALTER TABLE, y SQLite rechaza añadir una columna NOT NULL sin
+     * valor por defecto a una tabla que ya tiene filas.
+     */
+    @Column(nullable = false, columnDefinition = "boolean not null default 0")
+    private boolean mustChangePassword = false;
+
     @Column(nullable = false)
     private LocalDate createdAt = LocalDate.now();
 

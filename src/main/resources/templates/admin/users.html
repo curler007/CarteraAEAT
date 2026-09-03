@@ -53,6 +53,10 @@
                         <span th:unless="${u.enabled}" class="text-muted">
                             <i class="bi bi-slash-circle me-1"></i>Desactivado
                         </span>
+                        <span th:if="${u.mustChangePassword}" class="badge bg-warning text-dark ms-1"
+                              title="Aún no ha elegido su propia contraseña">
+                            <i class="bi bi-key me-1"></i>cambio pendiente
+                        </span>
                     </td>
                     <td th:text="${#temporals.format(u.createdAt, 'dd/MM/yyyy')}"></td>
                     <td class="text-end">
