@@ -28,6 +28,7 @@ import org.springframework.test.context.DynamicPropertySource;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDate;
@@ -258,6 +259,43 @@ class InversisImportTest {
     }
 
     @Test
+    @DisplayName("Un traspaso completo no genera ningún aviso")
+    void balancedTransferIsSilent() throws IOException {
+        assertEquals(List.of(), importFixture(ImportMode.ADD).warnings());
+    }
+
+    @Test
+    @DisplayName("Avisa si al traspaso le falta una de las dos patas")
+    void warnsAboutOrphanTransfer() {
+        // Solo la entrada: es lo que pasa al importar un fichero que empieza más tarde que la
+        // cartera, y significa que no hay coste que heredar.
+        CsvImportResult result = csvService.importCsv(alice, table(
+                row("2024-06-05", "SUSCR.POR TRASPASO I", FUND_B, "FONDO B", "75", "EUR", "1500.00")
+        ), ImportMode.ADD);
+
+        assertEquals(1, result.warnings().size(), result.warnings().toString());
+        assertTrue(result.warnings().get(0).contains("no trae el fondo de origen"),
+                result.warnings().get(0));
+    }
+
+    @Test
+    @DisplayName("Avisa si lo que sale del traspaso no coincide con lo que entra")
+    void warnsAboutUnbalancedTransfer() {
+        // El extracto no ata las dos patas con ningún identificador: se agrupan por cercanía en
+        // el tiempo, así que el importe es la única señal de que la agrupación ha fallado.
+        CsvImportResult result = csvService.importCsv(alice, table(
+                row("2024-01-10", "SUSCRIPCION", FUND_A, "FONDO A", "100", "EUR", "1000.00"),
+                row("2024-06-03", "REEMB.POR TRASPASO I", FUND_A, "FONDO A", "60", "EUR", "750.00"),
+                row("2024-06-05", "SUSCR.POR TRASPASO I", FUND_B, "FONDO B", "75", "EUR", "1500.00")
+        ), ImportMode.ADD);
+
+        assertEquals(1, result.warnings().size(), result.warnings().toString());
+        assertTrue(result.warnings().get(0).contains("no cuadra"), result.warnings().get(0));
+        assertTrue(result.warnings().get(0).contains("750.00"), result.warnings().get(0));
+        assertTrue(result.warnings().get(0).contains("1500.00"), result.warnings().get(0));
+    }
+
+    @Test
     @DisplayName("Reimportar el mismo fichero no duplica nada")
     void reimportIsIdempotent() throws IOException {
         importFixture(ImportMode.ADD);
@@ -296,6 +334,24 @@ class InversisImportTest {
     }
 
     // ─── Utilidades ──────────────────────────────────────────────────────────
+
+    /** Extracto mínimo con las once columnas que sirve Inversis, para los casos de borde. */
+    private static byte[] table(String... rows) {
+        return ("<html><body><table border=\"1\">"
+                + "<tr><th>Operación</th><th>Liquidación</th><th>Operación</th><th>Mercado</th>"
+                + "<th>Operación</th><th>ISIN</th><th>Valor</th><th>Títulos/NOMINAL</th>"
+                + "<th>Divisa</th><th>Precio Neto</th><th>Importe neto</th></tr>"
+                + String.join("", rows)
+                + "</table></body></html>").getBytes(StandardCharsets.ISO_8859_1);
+    }
+
+    private static String row(String date, String type, String isin, String name,
+                              String qty, String currency, String amount) {
+        return "<tr><td>" + date + "</td><td>" + date + "</td><td>1</td>"
+                + "<td>FONDOS EXTRANJEROS</td><td>" + type + "</td><td>" + isin + "</td>"
+                + "<td>" + name + "</td><td>" + qty + "</td><td>" + currency + "</td>"
+                + "<td>1.0</td><td>" + amount + "</td></tr>";
+    }
 
     private List<Operation> operations(String ticker) {
         return operationRepo.findByUserIdAndTickerOrderByDateAscIdAsc(alice, ticker);

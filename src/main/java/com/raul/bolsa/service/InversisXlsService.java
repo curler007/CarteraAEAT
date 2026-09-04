@@ -177,7 +177,7 @@ public class InversisXlsService {
         }
 
         return new InversisParseResult(forms, ignored, duplicates,
-                orphanTransfers(forms), List.of());
+                transferWarnings(forms), List.of());
     }
 
     // ─── Lectura del fichero ─────────────────────────────────────────────────
@@ -346,23 +346,60 @@ public class InversisXlsService {
     }
 
     /**
-     * Traspasos en los que falta una de las dos patas. Pasa al importar un fichero que empieza
-     * más tarde que la cartera: sin el reembolso de origen no hay coste que heredar, y la entrada
-     * se da de alta por el valor con el que entró, que no tiene por qué ser el que costó.
+     * Descuadre a partir del cual se avisa de un traspaso. Lo que sale de unos fondos y lo que
+     * entra en otros es el mismo dinero, así que solo deberían separarlos el redondeo y, en los
+     * fondos en divisa, la diferencia entre el cambio del BCE y el que aplicó el banco.
      */
-    private static List<String> orphanTransfers(List<OperationForm> forms) {
-        Map<String, Set<OperationType>> sides = new LinkedHashMap<>();
+    private static final BigDecimal TRANSFER_TOLERANCE = new BigDecimal("0.01");
+
+    /**
+     * Traspasos que no acaban de cuadrar, para poder avisar. Son dos avisos distintos.
+     *
+     * <p>Que falte una de las dos patas pasa al importar un fichero que empieza más tarde que la
+     * cartera: sin el reembolso de origen no hay coste que heredar y la entrada se da de alta por
+     * el valor con el que entró, que no tiene por qué ser el que costó.
+     *
+     * <p>Que las dos patas estén pero no sumen lo mismo apunta a otra cosa: el extracto no trae
+     * ningún identificador que las ate, así que se agrupan por cercanía en el tiempo, y si dos
+     * traspasos sin relación cayeran demasiado juntos se mezclarían en uno. El importe es la
+     * única señal que queda para detectarlo.
+     */
+    private static List<String> transferWarnings(List<OperationForm> forms) {
+        Map<String, List<OperationForm>> events = new LinkedHashMap<>();
         for (OperationForm f : forms) {
             if (f.getTransferId() != null) {
-                sides.computeIfAbsent(f.getTransferId(), k -> new HashSet<>()).add(f.getType());
+                events.computeIfAbsent(f.getTransferId(), k -> new ArrayList<>()).add(f);
             }
         }
-        return sides.entrySet().stream()
-                .filter(e -> e.getValue().size() < 2)
-                .map(e -> e.getKey().substring(NOTE_PREFIX.length())
-                        + (e.getValue().contains(OperationType.TRASPASO_IN)
-                           ? " (falta el fondo de origen)" : " (falta el fondo de destino)"))
-                .toList();
+
+        List<String> warnings = new ArrayList<>();
+        events.forEach((id, event) -> {
+            String when = id.substring(NOTE_PREFIX.length());
+            BigDecimal out = sumOf(event, OperationType.TRASPASO_OUT);
+            BigDecimal in = sumOf(event, OperationType.TRASPASO_IN);
+
+            if (out.signum() == 0) {
+                warnings.add("el traspaso del " + when + " no trae el fondo de origen");
+            } else if (in.signum() == 0) {
+                warnings.add("el traspaso del " + when + " no trae el fondo de destino");
+            } else {
+                BigDecimal gap = in.subtract(out).abs();
+                if (gap.compareTo(out.multiply(TRANSFER_TOLERANCE)) > 0) {
+                    warnings.add("en el traspaso del " + when + " no cuadra lo que sale ("
+                            + money(out) + " €) con lo que entra (" + money(in) + " €)");
+                }
+            }
+        });
+        return warnings;
+    }
+
+    private static BigDecimal sumOf(List<OperationForm> event, OperationType type) {
+        return event.stream().filter(f -> f.getType() == type)
+                .map(OperationForm::getTotal).reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    private static String money(BigDecimal v) {
+        return v.setScale(2, RoundingMode.HALF_UP).toPlainString();
     }
 
     /** La clave ocupa hasta el primer espacio; lo que sigue son anotaciones nuestras. */

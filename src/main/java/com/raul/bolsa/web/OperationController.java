@@ -24,6 +24,7 @@ import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -38,6 +39,9 @@ import java.util.stream.Collectors;
 public class OperationController {
 
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("dd/MM/yyyy");
+
+    /** Fecha sin año, para etiquetas donde el espacio manda. */
+    private static final DateTimeFormatter SHORT_DATE_FMT = DateTimeFormatter.ofPattern("dd/MM");
 
     private final OperationRepository operationRepo;
     private final FifoLotRepository fifoLotRepo;
@@ -228,6 +232,9 @@ public class OperationController {
                 ));
         model.addAttribute("sellTooltip", sellTooltip);
 
+        model.addAttribute("transferTooltip", transferTooltips(operations));
+        model.addAttribute("transferLabel", transferLabels(operations));
+
         // Lista unificada de operaciones + splits ordenada por fecha DESC
         List<HistoryRow> history = new ArrayList<>();
         operations.forEach(op -> history.add(new HistoryRow(op.getDate(), op, null)));
@@ -339,6 +346,64 @@ public class OperationController {
                         op -> new TickerInfo(op.getAssetName(), op.getAeatGroup().name()),
                         (existing, replacement) -> existing   // si hay duplicados, queda el primero
                 ));
+    }
+
+    /**
+     * Las patas de cada traspaso, agrupadas por el identificador que comparten. Un rebalanceo
+     * reparte varios fondos entre varios fondos, así que ninguna pata se entiende sola.
+     */
+    private static Map<String, List<Operation>> transferEvents(List<Operation> operations) {
+        return operations.stream()
+                .filter(op -> op.getTransferId() != null)
+                .collect(Collectors.groupingBy(Operation::getTransferId));
+    }
+
+    /**
+     * Tooltip de cada pata: a dónde fue el dinero, o de dónde vino. Se resume el evento entero en
+     * vez de listar sus filas, que en un rebalanceo grande pasan de la docena.
+     */
+    private Map<Long, String> transferTooltips(List<Operation> operations) {
+        Map<Long, String> out = new HashMap<>();
+        transferEvents(operations).values().forEach(event -> {
+            LocalDate date = event.stream().map(Operation::getDate)
+                    .min(LocalDate::compareTo).orElseThrow();
+            List<String> from = tickersOf(event, OperationType.TRASPASO_OUT);
+            List<String> to = tickersOf(event, OperationType.TRASPASO_IN);
+            BigDecimal amount = event.stream()
+                    .filter(op -> op.getType() == OperationType.TRASPASO_OUT)
+                    .map(Operation::getTotal).reduce(BigDecimal.ZERO, BigDecimal::add);
+
+            String head = "Traspaso del " + DATE_FMT.format(date) + "<br>"
+                    + count(from, "fondo") + " → " + count(to, "fondo")
+                    + " · " + amount.setScale(2, RoundingMode.HALF_UP) + " €<br>";
+            for (Operation op : event) {
+                boolean outgoing = op.getType() == OperationType.TRASPASO_OUT;
+                List<String> other = outgoing ? to : from;
+                out.put(op.getId(), head + (outgoing ? "Destino: " : "Origen: ")
+                        + (other.isEmpty() ? "sin registrar" : String.join(", ", other)));
+            }
+        });
+        return out;
+    }
+
+    /** Fecha corta del evento, para distinguir de un vistazo dos traspasos distintos. */
+    private Map<Long, String> transferLabels(List<Operation> operations) {
+        Map<Long, String> out = new HashMap<>();
+        transferEvents(operations).values().forEach(event -> {
+            String label = SHORT_DATE_FMT.format(event.stream().map(Operation::getDate)
+                    .min(LocalDate::compareTo).orElseThrow());
+            event.forEach(op -> out.put(op.getId(), label));
+        });
+        return out;
+    }
+
+    private static List<String> tickersOf(List<Operation> event, OperationType type) {
+        return event.stream().filter(op -> op.getType() == type)
+                .map(Operation::getTicker).distinct().sorted().toList();
+    }
+
+    private static String count(List<String> tickers, String noun) {
+        return tickers.size() + " " + noun + (tickers.size() == 1 ? "" : "s");
     }
 
     /**
