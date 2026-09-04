@@ -13,6 +13,8 @@ import java.util.Map;
  * @param duplicates operaciones omitidas por estar ya importadas
  * @param pendingValuation entregas dadas de alta a coste cero, pendientes de que el usuario
  *                         les ponga su valor de adquisición real
+ * @param warnings   avisos sobre lo importado: se ha guardado, pero con alguna salvedad que el
+ *                   usuario tiene que conocer para interpretar bien las cifras
  */
 public record CsvImportResult(
         String format,
@@ -21,6 +23,7 @@ public record CsvImportResult(
         Map<String, Integer> ignored,
         int duplicates,
         List<String> pendingValuation,
+        List<String> warnings,
         List<String> errors
 ) {
     public boolean ok() {
@@ -32,6 +35,6 @@ public record CsvImportResult(
     }
 
     public static CsvImportResult failed(List<String> errors) {
-        return new CsvImportResult("", 0, 0, Map.of(), 0, List.of(), errors);
+        return new CsvImportResult("", 0, 0, Map.of(), 0, List.of(), List.of(), errors);
     }
 }

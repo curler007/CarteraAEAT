@@ -20,8 +20,9 @@
 
     <div class="alert alert-info">
         <i class="bi bi-magic me-1"></i>
-        El formato se detecta solo: puedes subir tanto el CSV de esta aplicación como la
-        <strong>Exportación de transacción</strong> que genera Trade Republic, sin convertir nada.
+        El formato se detecta solo: puedes subir el CSV de esta aplicación, la
+        <strong>Exportación de transacción</strong> de Trade Republic o el
+        <strong>extracto de movimientos</strong> de tu cartera de MyInvestor, sin convertir nada.
     </div>
 
     <!-- ═══ Trade Republic ═══ -->
@@ -52,6 +53,48 @@
             <p class="mb-0 small text-muted">
                 Los splits no vienen en este fichero como tales; regístralos desde
                 <a href="/splits">Splits</a>, donde además se te sugieren automáticamente.
+            </p>
+        </div>
+    </div>
+
+    <!-- ═══ MyInvestor ═══ -->
+    <div class="card shadow-sm mb-4">
+        <div class="card-header bg-light fw-semibold">
+            <i class="bi bi-pie-chart me-1"></i>Extracto de MyInvestor (cartera automatizada)
+        </div>
+        <div class="card-body">
+            <p class="mb-2">
+                Es el fichero que descargas desde el detalle de la cartera. Se llama
+                <code>salida.xls</code> pero por dentro es una tabla HTML de Inversis, el
+                depositario que hay detrás; se sube tal cual, sin abrirlo ni convertirlo.
+            </p>
+            <p class="mb-2 small text-danger-emphasis">
+                <i class="bi bi-exclamation-triangle me-1"></i>
+                No sirve el <strong>extracto de la cuenta corriente</strong> asociada a la cartera:
+                ese solo dice cuántos euros salieron, no cuántas participaciones se compraron ni a
+                qué precio, y no registra los traspasos entre fondos.
+            </p>
+            <ul class="mb-2 small">
+                <li>Las decenas de órdenes que un rebalanceo genera del mismo fondo y el mismo día
+                    se agrupan en <strong>una sola operación</strong>, que es el movimiento que de
+                    verdad ha ocurrido.</li>
+                <li>Los <strong>traspasos</strong> y los cambios de clase se importan como tales:
+                    no tributan, pero llevan al fondo de destino el coste y la antigüedad del de
+                    origen. Solo los <strong>reembolsos</strong> llegan a la declaración.</li>
+                <li>El ticker es el <strong>nombre del fondo</strong> y el ISIN se guarda aparte,
+                    que es de donde sale la cotización. Si un fondo aparece con dos nombres a lo
+                    largo del fichero se usa el más reciente, para que no queden dos posiciones
+                    distintas del mismo fondo. El broker se rellena como <code>MyInvestor</code>.</li>
+                <li>Los fondos en divisa se pasan a euros con el <strong>tipo oficial del BCE</strong>
+                    de la fecha de la operación. Si no hay conexión para consultarlo, no se importa
+                    nada y se te dice qué movimientos faltaban por convertir.</li>
+                <li>Puedes <strong>volver a importar el histórico completo</strong> cuantas veces
+                    quieras: lo ya cargado se reconoce por fecha, fondo y tipo, y se omite.</li>
+            </ul>
+            <p class="mb-0 small text-muted">
+                Si el fichero empieza más tarde que tu cartera puede aparecer un traspaso al que le
+                falta el fondo de origen. Se avisa al terminar: esas participaciones se dan de alta
+                por el valor con el que entraron, que no tiene por qué ser lo que costaron.
             </p>
         </div>
     </div>
@@ -90,7 +133,9 @@
                     <tr>
                         <td><code>Tipo</code></td><td>Sí</td>
                         <td><code>BUY</code> (compra), <code>SELL</code> (venta),
-                            <code>CANJE</code> (acciones liberadas) o <code>SPLIT</code>.</td>
+                            <code>CANJE</code> (acciones liberadas),
+                            <code>TRASPASO_OUT</code> / <code>TRASPASO_IN</code> (traspaso entre
+                            fondos) o <code>SPLIT</code>.</td>
                     </tr>
                     <tr>
                         <td><code>Ticker</code></td><td>Sí</td>
@@ -129,6 +174,13 @@
                     <tr>
                         <td><code>Notas</code></td><td>No</td>
                         <td>Texto libre.</td>
+                    </tr>
+                    <tr>
+                        <td><code>Traspaso</code></td><td>Solo en traspasos</td>
+                        <td>Etiqueta que empareja la salida de un fondo con la entrada en otro.
+                            Todas las filas del mismo traspaso llevan el mismo valor; es lo que
+                            permite que el coste viaje de un fondo a otro. Los ficheros exportados
+                            antes de que existiera esta columna se siguen importando igual.</td>
                     </tr>
                     </tbody>
                 </table>

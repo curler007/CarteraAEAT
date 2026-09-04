@@ -113,7 +113,7 @@ public class SplitDetectionService {
             if (!op.getDate().isBefore(at)) continue;
             BigDecimal qty = op.getQuantity()
                     .multiply(splitService.cumulativeFactor(registered, op.getDate(), upTo));
-            total = op.getType() == OperationType.SELL ? total.subtract(qty) : total.add(qty);
+            total = op.getType().reducesPosition() ? total.subtract(qty) : total.add(qty);
         }
         return total;
     }

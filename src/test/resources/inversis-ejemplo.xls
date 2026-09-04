@@ -1,0 +1,158 @@
+<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
+<head>
+    <meta http-equiv=Content-Type content="text/html; charset=iso-8859-1">
+    <meta name=ProgId content=Excel.Sheet>
+</head>
+<body>
+    <table border="1">
+      <TR>
+        <th colspan="2">Fechas</th>
+        <th rowspan="2">Operación</th>
+        <th rowspan="2">Mercado</th>
+        <th rowspan="2">Operación</th>
+        <th rowspan="2">ISIN</th>
+        <th rowspan="2">Valor</th>
+        <th rowspan="2">Títulos/NOMINAL</th>
+        <th rowspan="2">Divisa</th>
+        <th rowspan="2">Precio Neto</th>
+        <th rowspan="2">Importe neto</th>
+      </TR>
+      <tr>
+        <th>Operación</th>
+        <th>Liquidación</th>
+      </TR>
+
+      <!-- Una misma suscripción partida en dos órdenes: al importar tiene que quedar una sola
+           operación de 100 títulos y 1000 EUR. -->
+      <tr>
+        <td align="center">2024-01-10&nbsp;</td>
+        <td align="center">2024-01-11&nbsp;</td>
+        <td> 100000001</td>
+        <td>FONDOS EXTRANJEROS</td>
+        <td>SUSCRIPCION</td>
+        <td>IE0000000001</td>
+        <td>FONDO A INDEX P ACC EUR</td>
+        <td x:num="50.00000000">50.00000000</td>
+        <td>EUR</td>
+        <td x:num="10.0000000">10.0000000</td>
+        <td x:num="500.00">500.00</td>
+      </tr>
+      <tr>
+        <td align="center">2024-01-10&nbsp;</td>
+        <td align="center">2024-01-11&nbsp;</td>
+        <td> 100000002</td>
+        <td>FONDOS EXTRANJEROS</td>
+        <td>SUSCRIPCION</td>
+        <td>IE0000000001</td>
+        <td>FONDO A INDEX P ACC EUR</td>
+        <td x:num="50.00000000">50.00000000</td>
+        <td>EUR</td>
+        <td x:num="10.0000000">10.0000000</td>
+        <td x:num="500.00">500.00</td>
+      </tr>
+      <tr>
+        <td align="center">2024-02-10&nbsp;</td>
+        <td align="center">2024-02-12&nbsp;</td>
+        <td> 100000003</td>
+        <td>FONDOS EXTRANJEROS</td>
+        <td>SUSCRIPCION</td>
+        <td>IE0000000001</td>
+        <td>FONDO A INDEX P ACC EUR</td>
+        <td x:num="50.00000000">50.00000000</td>
+        <td>EUR</td>
+        <td x:num="12.0000000">12.0000000</td>
+        <td x:num="600.00">600.00</td>
+      </tr>
+
+      <!-- Traspaso del fondo A al fondo B: sale valor 1500, entra valor 1500. -->
+      <tr>
+        <td align="center">2024-06-03&nbsp;</td>
+        <td align="center">2024-06-04&nbsp;</td>
+        <td> 100000004</td>
+        <td>FONDOS EXTRANJEROS</td>
+        <td>REEMB.POR TRASPASO I</td>
+        <td>IE0000000001</td>
+        <td>FONDO A INDEX P ACC EUR</td>
+        <td x:num="120.00000000">120.00000000</td>
+        <td>EUR</td>
+        <td x:num="12.5000000">12.5000000</td>
+        <td x:num="1500.00">1500.00</td>
+      </tr>
+      <tr>
+        <td align="center">2024-06-05&nbsp;</td>
+        <td align="center">2024-06-07&nbsp;</td>
+        <td> 100000005</td>
+        <td>FONDOS EXTRANJEROS</td>
+        <td>SUSCR.POR TRASPASO I</td>
+        <td>IE0000000002</td>
+        <td>FONDO B INDEX P ACC EUR</td>
+        <td x:num="75.00000000">75.00000000</td>
+        <td>EUR</td>
+        <td x:num="20.0000000">20.0000000</td>
+        <td x:num="1500.00">1500.00</td>
+      </tr>
+
+      <!-- Fondo en divisa: 125 USD. -->
+      <tr>
+        <td align="center">2024-09-10&nbsp;</td>
+        <td align="center">2024-09-11&nbsp;</td>
+        <td> 100000006</td>
+        <td>FONDOS EXTRANJEROS</td>
+        <td>SUSCRIPCION</td>
+        <td>IE0000000003</td>
+        <td>FONDO C IDX P AC USD</td>
+        <td x:num="10.00000000">10.00000000</td>
+        <td>USD</td>
+        <td x:num="12.5000000">12.5000000</td>
+        <td x:num="125.00">125.00</td>
+      </tr>
+
+      <!-- Mismo fondo C, pero el gestor ya lo etiqueta con la gestora delante. Tiene que quedar
+           una sola posición, con el nombre más reciente: dos tickers para el mismo ISIN partirían
+           el FIFO en dos. -->
+      <tr>
+        <td align="center">2025-01-15&nbsp;</td>
+        <td align="center">2025-01-16&nbsp;</td>
+        <td> 100000009</td>
+        <td>FONDOS EXTRANJEROS</td>
+        <td>SUSCRIPCION</td>
+        <td>IE0000000003</td>
+        <td>GESTORA FONDO C IDX P AC USD</td>
+        <td x:num="10.00000000">10.00000000</td>
+        <td>USD</td>
+        <td x:num="12.5000000">12.5000000</td>
+        <td x:num="125.00">125.00</td>
+      </tr>
+
+      <!-- Único movimiento que tributa. -->
+      <tr>
+        <td align="center">2025-03-20&nbsp;</td>
+        <td align="center">2025-03-21&nbsp;</td>
+        <td> 100000007</td>
+        <td>FONDOS EXTRANJEROS</td>
+        <td>REEMBOLSO</td>
+        <td>IE0000000002</td>
+        <td>FONDO B INDEX P ACC EUR</td>
+        <td x:num="30.00000000">30.00000000</td>
+        <td>EUR</td>
+        <td x:num="23.3333333">23.3333333</td>
+        <td x:num="700.00">700.00</td>
+      </tr>
+
+      <!-- No mueve ninguna posición: tiene que quedar contado como ignorado. -->
+      <tr>
+        <td align="center">2025-04-01&nbsp;</td>
+        <td align="center">2025-04-01&nbsp;</td>
+        <td> 100000008</td>
+        <td>FONDOS EXTRANJEROS</td>
+        <td>COM. GESTION 1T 2025</td>
+        <td>IE0000000002</td>
+        <td>FONDO B INDEX P ACC EUR</td>
+        <td x:num="0.00000000">0.00000000</td>
+        <td>EUR</td>
+        <td x:num="0.0000000">0.0000000</td>
+        <td x:num="2.15">2.15</td>
+      </tr>
+    </table>
+</body>
+</html>

@@ -34,9 +34,19 @@ public interface OperationRepository extends JpaRepository<Operation, Long> {
     boolean existsByUserIdAndTickerAndTypeAndPendingQtyGreaterThan(
             Long userId, String ticker, OperationType type, BigDecimal qty);
 
-    /** ¿Hay alguna venta pendiente de este usuario para este ticker con fecha anterior a la dada? */
-    boolean existsByUserIdAndTickerAndTypeAndPendingQtyGreaterThanAndDateBefore(
-            Long userId, String ticker, OperationType type, BigDecimal qty, LocalDate date);
+    /**
+     * ¿Hay alguna salida pendiente de este usuario para este ticker con fecha anterior a la dada?
+     * Cuenta tanto la venta como la salida de un traspaso: las dos sacan títulos, y dejar pasar
+     * una por delante de otra pendiente rompería el orden FIFO.
+     */
+    boolean existsByUserIdAndTickerAndTypeInAndPendingQtyGreaterThanAndDateBefore(
+            Long userId, String ticker, List<OperationType> types, BigDecimal qty, LocalDate date);
+
+    /** Todas las operaciones del usuario en orden cronológico, para el replay global. */
+    List<Operation> findByUserIdOrderByDateAscIdAsc(Long userId);
+
+    /** ¿La cartera del usuario contiene traspasos, que obligan a recalcular en bloque? */
+    boolean existsByUserIdAndTypeIn(Long userId, List<OperationType> types);
 
     void deleteByUserId(Long userId);
 }

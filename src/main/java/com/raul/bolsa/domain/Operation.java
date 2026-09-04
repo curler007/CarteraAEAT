@@ -67,6 +67,15 @@ public class Operation {
     private String notes;
 
     /**
+     * Empareja las dos patas de un traspaso entre fondos. Todas las salidas y entradas de un
+     * mismo traspaso comparten valor, porque el reparto es de muchos fondos a muchos fondos:
+     * el coste que sale del conjunto de origen es el que entra en el conjunto de destino, y solo
+     * tiene sentido repartirlo mirando el evento entero.
+     */
+    @Column(name = "transfer_id")
+    private String transferId;
+
+    /**
      * Para ventas: cantidad de acciones aún sin casar con ningún lote de compra.
      * null o 0 = totalmente resuelta. > 0 = pendiente (parcial o total).
      * Siempre null para compras.

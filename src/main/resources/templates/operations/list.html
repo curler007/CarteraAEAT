@@ -112,7 +112,7 @@
                     <!-- Fila de OPERACIÓN -->
                     <tr th:if="${row.operation != null}"
                         th:attr="data-isin=${row.operation.assetName},data-qty=${row.operation.quantity},data-total=${row.operation.total},data-remaining=${lotRemainingQty[row.operation.id] ?: row.operation.quantity},data-remaining-cost=${lotRemainingCost[row.operation.id] ?: row.operation.total}"
-                        th:classappend="${row.operation.unvalued} ? 'row-unvalued' : (${row.operation.pending} ? 'table-danger' : (${row.operation.type.name() == 'SELL'} ? 'table-secondary' : (${lotRowClass[row.operation.id]} ?: '')))">
+                        th:classappend="${row.operation.unvalued} ? 'row-unvalued' : (${row.operation.pending} ? 'table-danger' : (${row.operation.type.reducesPosition()} ? 'table-secondary' : (${lotRowClass[row.operation.id]} ?: '')))">
                         <td th:text="${#temporals.format(row.operation.date, 'dd/MM/yyyy')}"></td>
                         <td>
                             <span th:if="${row.operation.type.name() == 'BUY'}"
@@ -121,6 +121,14 @@
                                   class="badge badge-sell">Venta</span>
                             <span th:if="${row.operation.type.name() == 'CANJE'}"
                                   class="badge bg-info text-dark">Canje</span>
+                            <span th:if="${row.operation.type.name() == 'TRASPASO_OUT'}"
+                                  class="badge bg-secondary"
+                                  title="Traspaso a otro fondo: no tributa, el coste viaja con las participaciones">
+                                Traspaso ↗</span>
+                            <span th:if="${row.operation.type.name() == 'TRASPASO_IN'}"
+                                  class="badge bg-secondary"
+                                  title="Traspaso desde otro fondo: hereda el coste y la antigüedad del origen">
+                                Traspaso ↘</span>
                             <span th:if="${row.operation.pending}"
                                   class="badge bg-warning text-dark ms-1"
                                   th:text="'⏳ ' + ${@fmt.qty(row.operation.pendingQty)}">
@@ -144,6 +152,7 @@
                         <td class="text-end text-muted"
                             th:if="${row.operation.type.name() != 'SELL'}"
                             th:text="${@fmt.qty(runningBalance[row.operation.id])}"></td>
+
                         <td class="text-end text-muted"
                             th:if="${row.operation.type.name() == 'SELL'}"
                             th:text="${@fmt.qty(runningBalance[row.operation.id])}"
