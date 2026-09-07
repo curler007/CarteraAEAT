@@ -65,22 +65,22 @@ public class QuoteService {
     /**
      * Cotización de un ISIN, probando antes su gemelo si lo tiene.
      *
-     * <p>El gemelo llega como parámetro y no se busca aquí a propósito: quien lo guarda necesita
-     * cotizar para comprobarlo, y si este servicio fuese a buscarlo los dos se llamarían en
-     * círculo. Si el gemelo falla se sigue por el camino de siempre, que es lo prudente cuando el
-     * símbolo lo ha escrito una persona.
+     * <p>La regla es tajante: si hay gemelo se consulta el gemelo y solo el gemelo. Caer de vuelta
+     * al ISIN cuando el gemelo falla sería peor que no cotizar, porque taparía un símbolo mal
+     * escrito con un precio de aspecto correcto y nadie se enteraría. Sin precio, en cambio, la
+     * fila sale con rayas y el punto del listado en rojo.
+     *
+     * <p>El gemelo llega como parámetro y no se busca aquí: quien lo guarda necesita cotizar para
+     * comprobarlo, y si este servicio fuese a leer los gemelos los dos se llamarían en círculo.
      */
     public Optional<QuoteResult> getQuote(String isin, String twin) {
-        if (twin != null && !twin.isBlank()) {
-            try {
-                Optional<QuoteResult> byTwin = fetchQuote(twin.trim());
-                if (byTwin.isPresent()) return byTwin;
-                log.debug("El gemelo {} de {} no devolvió precio; se prueba el ISIN", twin, isin);
-            } catch (Exception e) {
-                log.warn("No se pudo cotizar el gemelo {} de {}: {}", twin, isin, e.getMessage());
-            }
+        if (twin == null || twin.isBlank()) return getQuote(isin);
+        try {
+            return fetchQuote(twin.trim());
+        } catch (Exception e) {
+            log.warn("No se pudo cotizar el gemelo {} de {}: {}", twin, isin, e.getMessage());
+            return Optional.empty();
         }
-        return getQuote(isin);
     }
 
     public Optional<QuoteResult> getQuote(String isin) {

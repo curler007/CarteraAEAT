@@ -55,6 +55,7 @@ public class SplitDetectionService {
     private final SplitRepository splitRepo;
     private final QuoteService quoteService;
     private final SplitService splitService;
+    private final IsinTwinService twinService;
 
     /** Evita repetir la consulta a Yahoo en cada refresco de la página. Clave: ISIN. */
     private final Map<String, CachedSplits> cache = new ConcurrentHashMap<>();
@@ -81,7 +82,7 @@ public class SplitDetectionService {
             List<Split> registered = registeredByTicker.getOrDefault(entry.getKey(), List.of());
 
             String isin = ops.get(0).getAssetName();
-            CachedSplits fetched = fetchSplits(isin);
+            CachedSplits fetched = fetchSplits(userId, isin);
             if (fetched == null) continue;
 
             for (YahooSplit ys : fetched.splits()) {
@@ -123,22 +124,39 @@ public class SplitDetectionService {
                 Math.abs(ChronoUnit.DAYS.between(s.getDate(), date)) <= DUPLICATE_TOLERANCE_DAYS);
     }
 
+    /** El gemelo si lo tiene, y si no los candidatos que resuelva Yahoo. */
+    private List<String> symbolsFor(Long userId, String isin) {
+        return twinService.twinOf(userId, isin)
+                .map(List::of)
+                .orElseGet(() -> quoteService.candidateSymbols(isin));
+    }
+
     private boolean isScrip(BigDecimal ratio) {
         return ratio.compareTo(SCRIP_LOW) > 0 && ratio.compareTo(SCRIP_HIGH) < 0;
     }
 
-    /** Consulta el histórico de splits del ISIN, con caché. Devuelve null si no se pudo resolver. */
-    private CachedSplits fetchSplits(String isin) {
-        CachedSplits cached = cache.get(isin);
+    /**
+     * Consulta el histórico de splits del ISIN, con caché. Devuelve null si no se pudo resolver.
+     *
+     * <p>Pasa por el gemelo igual que el resto de consultas a Yahoo: si un ISIN necesita gemelo
+     * para cotizar, también lo necesita para que le encuentren los splits, y buscarlos por el
+     * símbolo que resuelve Yahoo por su cuenta daría los de otro listado o ninguno.
+     *
+     * <p>La caché lleva el usuario en la clave porque los gemelos son suyos: el mismo ISIN puede
+     * estar mirando a símbolos distintos en dos carteras.
+     */
+    private CachedSplits fetchSplits(Long userId, String isin) {
+        String key = userId + ":" + isin;
+        CachedSplits cached = cache.get(key);
         if (cached != null && !cached.expired()) return cached;
 
-        for (String symbol : quoteService.candidateSymbols(isin)) {
+        for (String symbol : symbolsFor(userId, isin)) {
             try {
                 JsonNode result = quoteService.fetchChartResult(symbol, SPLIT_CHART_QUERY).orElse(null);
                 if (result == null) continue;
                 CachedSplits fresh = new CachedSplits(
                         System.currentTimeMillis(), symbol, parseSplits(result));
-                cache.put(isin, fresh);
+                cache.put(key, fresh);
                 return fresh;
             } catch (Exception e) {
                 log.warn("No se pudieron obtener splits de {} ({}): {}", isin, symbol, e.getMessage());
