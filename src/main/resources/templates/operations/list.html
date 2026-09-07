@@ -142,7 +142,10 @@
                             </a>
                         </td>
                         <td><strong th:text="${row.operation.ticker}"></strong></td>
-                        <td th:text="${row.operation.assetName}"></td>
+                        <td>
+                            <span class="isin-dot me-1 text-muted">·</span><span
+                                  th:text="${row.operation.assetName}"></span>
+                        </td>
                         <td th:text="${row.operation.broker}"></td>
                         <td class="text-end" th:text="${@fmt.qty(row.operation.quantity)}"></td>
                         <td class="text-end" th:text="${#numbers.formatDecimal(row.operation.price, 1, 4)}"></td>
@@ -192,6 +195,50 @@
     document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => {
         new bootstrap.Tooltip(el);
     });
+
+    // ── Estado del ISIN en Yahoo ──────────────────────────────────────────────
+    const esFecha = iso => iso.slice(8, 10) + '/' + iso.slice(5, 7) + '/' + iso.slice(0, 4);
+
+    /**
+     * Hay dos formas de estar mal y conviene distinguirlas: que Yahoo no conozca el ISIN, que
+     * suele ser un dato equivocado, y que lo conozca pero solo en un mercado sin histórico, que
+     * no se arregla corrigiendo el ISIN sino cambiándolo por otra clase del mismo fondo.
+     */
+    function tooltipFor(status) {
+        if (status.found) {
+            return 'Yahoo cotiza ' + status.isin + ' como ' + status.symbol
+                + ', con histórico desde ' + esFecha(status.historyFrom) + '.';
+        }
+        if (!status.symbol) {
+            return 'El ISIN ' + status.isin + ' no se encuentra en Yahoo. '
+                + 'Esta posición se queda sin precio y sin variaciones por periodo.';
+        }
+        return 'El ISIN ' + status.isin + ' resuelve en Yahoo a ' + status.symbol
+            + ', que publica precio pero no histórico. Las variaciones por periodo de esta '
+            + 'posición caen a su coste.';
+    }
+
+    // Verde si Yahoo sabe darle precio desde que el valor está en cartera; rojo si no, que es
+    // cuando la posición se queda sin precio ni histórico y conviene poder corregir el dato.
+    // Una sola llamada para toda la página: el servidor comparte la sesión de consulta, así que
+    // cada ISIN se resuelve una vez por mucho que se repita en el listado.
+    fetch('/api/isin-status')
+        .then(resp => resp.ok ? resp.json() : Promise.reject(resp.status))
+        .then(statuses => {
+            const byIsin = new Map(statuses.map(s => [s.isin, s]));
+            document.querySelectorAll('tr[data-isin]').forEach(row => {
+                const dot = row.querySelector('.isin-dot');
+                const status = byIsin.get(row.dataset.isin);
+                if (!dot || !status) return;
+                dot.classList.remove('text-muted');
+                dot.textContent = '●';
+                dot.style.color = status.found ? '#198754' : '#dc3545';
+                dot.setAttribute('data-bs-toggle', 'tooltip');
+                dot.setAttribute('data-bs-title', tooltipFor(status));
+                new bootstrap.Tooltip(dot);
+            });
+        })
+        .catch(() => { /* sin estado es como estaba antes: los puntos se quedan grises */ });
 
     const tickerFilter  = document.getElementById('tickerFilter');
     const brokerFilter  = document.getElementById('brokerFilter');

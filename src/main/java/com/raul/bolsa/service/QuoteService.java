@@ -15,6 +15,7 @@ import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 
@@ -36,6 +37,13 @@ public class QuoteService {
      * y el periodo anual se quedaba sin referencia de mercado.
      */
     private static final String QUOTE_CHART_QUERY = "interval=1d&range=2y";
+
+    /**
+     * Query para valorar la cartera en fechas pasadas. Va aparte de la del dashboard, que se pide
+     * una vez por posición en cada carga: aquí interesa alcance y allí ligereza.
+     */
+    private static final String HISTORIC_CHART_QUERY = "interval=1d&range=10y";
+
 
     /** ISINs no estándar que Yahoo Finance no reconoce → símbolo preferido en EUR, fallback en USD */
     private static final Map<String, String[]> ISIN_SYMBOL_OVERRIDE = Map.of(
@@ -169,6 +177,78 @@ public class QuoteService {
         return Optional.of(new QuoteResult(symbol, priceEur, prevEur,
                 toEurOrNull(refs.week(), eurRate), toEurOrNull(refs.month(), eurRate),
                 toEurOrNull(refs.year(), eurRate), currency, true));
+    }
+
+    /**
+     * Abre una sesión para valorar la cartera en fechas pasadas.
+     *
+     * <p>Existe para cachear: valorar tres periodos pregunta por los mismos valores tres veces, y
+     * cada consulta a Yahoo cuesta una resolución de símbolo más una serie. Con la sesión, cada
+     * valor se resuelve y se descarga una sola vez, sirva para las fechas que sirva.
+     */
+    public Historic openHistoric() {
+        return new Historic();
+    }
+
+    /** Serie histórica que Yahoo publica de un valor: bajo qué símbolo y desde cuándo. */
+    public record Series(String symbol, LocalDate from) {}
+
+    /** Ventana de consulta histórica con memoria de lo ya pedido. No es segura entre hilos. */
+    public class Historic {
+
+        private final Map<String, List<String>> symbols = new HashMap<>();
+        private final Map<String, JsonNode> charts = new HashMap<>();
+
+        /** Primer símbolo al que Yahoo resuelve el ISIN, o null si no resuelve a ninguno. */
+        public String symbolFor(String isin) {
+            List<String> found = symbols.computeIfAbsent(isin, QuoteService.this::candidateSymbols);
+            return found.isEmpty() ? null : found.get(0);
+        }
+
+        /**
+         * Serie histórica utilizable de un ISIN, si Yahoo publica alguna.
+         *
+         * <p>Se exige más de un cierre a propósito. Yahoo resuelve muchos fondos a un listado
+         * secundario de bolsa alemana que devuelve el precio de hoy y nada más: con un único punto
+         * la posición se ve bien en la tabla y en cambio no hay con qué calcular ninguna variación.
+         * Una serie de un punto no es una serie.
+         *
+         * <p>No se compara contra la fecha de compra. Que Yahoo empiece más tarde que la compra es
+         * normal en valores antiguos —Apple comprada en 2000, Telefónica en 2011— y no es un ISIN
+         * equivocado, que es lo que esto busca destapar.
+         */
+        public Optional<Series> seriesOf(String isin) {
+            for (String symbol : symbols.computeIfAbsent(isin, QuoteService.this::candidateSymbols)) {
+                JsonNode result = charts.computeIfAbsent(symbol, this::chart);
+                if (result == null) continue;
+                List<LocalDate> days = tradingDays(result);
+                if (days.size() < 2) continue;
+                return Optional.of(new Series(symbol, days.get(0)));
+            }
+            return Optional.empty();
+        }
+
+        private List<LocalDate> tradingDays(JsonNode result) {
+            JsonNode stamps = result.path("timestamp");
+            JsonNode closes = result.path("indicators").path("quote").path(0).path("close");
+            List<LocalDate> days = new ArrayList<>();
+            for (int i = 0; i < stamps.size() && i < closes.size(); i++) {
+                if (closes.get(i).isNumber() && closes.get(i).asDouble() > 0) {
+                    days.add(Instant.ofEpochSecond(stamps.get(i).asLong())
+                            .atZone(ZoneOffset.UTC).toLocalDate());
+                }
+            }
+            return days;
+        }
+
+        private JsonNode chart(String symbol) {
+            try {
+                return fetchChartResult(symbol, HISTORIC_CHART_QUERY).orElse(null);
+            } catch (Exception e) {
+                log.warn("No se pudo obtener el histórico de {}: {}", symbol, e.getMessage());
+                return null;
+            }
+        }
     }
 
     /** Cierres de referencia de los periodos que muestra el dashboard, en divisa original. */
