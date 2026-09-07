@@ -46,6 +46,7 @@
                         <span id="global-value">…</span>
                     </div>
                     <div class="small fw-semibold" id="global-delta">…</div>
+                    <div class="small text-muted" id="global-unvalued"></div>
                 </div>
             </div>
         </div>
@@ -124,7 +125,10 @@
                              data-added-month=${basisMonth[item.assetName()]?.addedCost() ?: 0},
                              data-held-year=${basisYear[item.assetName()]?.heldQty() ?: 0},
                              data-added-year=${basisYear[item.assetName()]?.addedCost() ?: 0}">
-                    <td><strong th:text="${item.ticker()}"></strong></td>
+                    <td>
+                        <strong th:text="${item.ticker()}"></strong>
+                        <span class="quote-flag ms-1"></span>
+                    </td>
                     <td th:text="${item.assetName()}"></td>
                     <td class="text-end" th:text="${#numbers.formatDecimal(item.totalQty(), 1, 4)}"></td>
                     <td class="text-end" th:text="${#numbers.formatDecimal(item.totalCost(), 1, 2)}"></td>
@@ -273,6 +277,13 @@
 
     let latentTotal = 0;      // plusvalía latente acumulada (€)
 
+    // Coste de las posiciones que sí han podido valorarse. El porcentaje global se mide sobre
+    // esto y no sobre el coste de toda la cartera: una posición sin cotización aporta cero a la
+    // plusvalía, y colarla en el divisor arrastraría el porcentaje hacia cero en silencio.
+    let valuedCost = 0;
+    let valuedRows = 0;
+    let allSettled = false;   // el aviso de lo no valorado solo tiene sentido al terminar
+
     // Variación por periodo. `base` es el punto de partida: lo que ya se tenía valorado al precio
     // de aquella fecha más el coste de lo comprado después, de forma que aportar dinero no cuenta
     // como ganancia. Solo suman las posiciones cuyo precio de referencia conocemos.
@@ -287,8 +298,9 @@
         p.pctEl = document.getElementById(p.pct);
     });
 
-    const globalValue = document.getElementById('global-value');
-    const globalDelta = document.getElementById('global-delta');
+    const globalValue    = document.getElementById('global-value');
+    const globalDelta    = document.getElementById('global-delta');
+    const globalUnvalued = document.getElementById('global-unvalued');
 
     // Mismo formato que los importes que pinta Thymeleaf, que quedan justo al lado
     // useGrouping 'always': es-ES no agruparía los millares de 4 dígitos, pero Thymeleaf sí
@@ -299,11 +311,28 @@
 
     function renderGlobal() {
         const c = latentTotal >= 0 ? GREEN : RED;
+        // El importe sí abarca la cartera entera: lo que no cotiza se queda valorado a su coste,
+        // que es lo más prudente que se puede decir de ello.
         globalValue.textContent = eur2.format(totalCost + latentTotal) + ' €';
         globalValue.style.color = c;
-        const pct = totalCost > 0 ? latentTotal / totalCost * 100 : 0;
+        const pct = valuedCost > 0 ? latentTotal / valuedCost * 100 : 0;
         globalDelta.textContent = '(' + signedEur(latentTotal) + '  ' + signedPct(pct) + ')';
         globalDelta.style.color = c;
+        renderUnvalued();
+    }
+
+    /**
+     * Deja a la vista la parte de la cartera que no ha podido valorarse, que entra en el importe
+     * global por su coste y queda fuera del porcentaje. Sin este aviso el porcentaje parecería
+     * referirse a toda la cartera.
+     */
+    function renderUnvalued() {
+        const pendingCost = totalCost - valuedCost;
+        if (!allSettled || pendingCost <= 0.005) { globalUnvalued.textContent = ''; return; }
+        const n = rows.length - valuedRows;
+        globalUnvalued.textContent = 'sin cotización: ' + n
+            + (n === 1 ? ' posición · ' : ' posiciones · ')
+            + eur2.format(pendingCost) + ' € a coste, fuera del %';
     }
 
     function renderPeriods() {
@@ -348,6 +377,23 @@
         cells.forEach(c => { c.textContent = '—'; c.classList.add('text-muted'); });
     }
 
+    /**
+     * Señala una posición que no ha podido valorarse y explica por qué. Las rayas de sus celdas
+     * dicen que falta el dato, pero no de quién es la culpa; y como el importe global la cuenta a
+     * coste y el porcentaje la deja fuera, conviene poder verlo desde su fila.
+     *
+     * <p>Deliberadamente no es un asterisco: ese ya significa "precio convertido a EUR" en la
+     * columna de precio actual.
+     */
+    function flagUnquoted(row, reason) {
+        const flag = row.querySelector('.quote-flag');
+        if (!flag) return;
+        flag.innerHTML = '<i class="bi bi-exclamation-triangle-fill text-warning small"></i>';
+        flag.setAttribute('data-bs-toggle', 'tooltip');
+        flag.setAttribute('data-bs-title', reason);
+        new bootstrap.Tooltip(flag);
+    }
+
     const rowCurrentValue = new Map();
 
     const rowPromises = Array.from(rows).map(async row => {
@@ -363,7 +409,13 @@
 
         try {
             const resp = await fetch(`/api/quote?isin=${encodeURIComponent(isin)}`);
-            if (!resp.ok) { setDash(cellPrice, cellPct, cellLatent, cellPctValue, cellValue); return; }
+            if (!resp.ok) {
+                setDash(cellPrice, cellPct, cellLatent, cellPctValue, cellValue);
+                flagUnquoted(row, resp.status === 404
+                    ? 'Sin cotización: Yahoo Finance no reconoce el ISIN ' + isin
+                    : 'Sin cotización: el servicio respondió ' + resp.status);
+                return;
+            }
 
             const q     = await resp.json();
             const price = q.price;
@@ -372,19 +424,30 @@
             const priceLabel = price.toFixed(2) + ' €' + (q.convertedToEur ? ' *' : '');
             cellPrice.textContent = priceLabel;
             color(cellPrice, price - avgCost);
+            if (q.convertedToEur) {
+                // El asterisco estaba sin explicar en ninguna parte
+                cellPrice.setAttribute('data-bs-toggle', 'tooltip');
+                cellPrice.setAttribute('data-bs-title',
+                    'Convertido a EUR desde ' + q.originalCurrency + ' al cambio de hoy');
+                new bootstrap.Tooltip(cellPrice);
+            }
 
             if (inEur) {
-                const pct = avgCost > 0 ? (price - avgCost) / avgCost * 100 : 0;
+                // Contra el coste de la posición, no contra el coste medio: ese viene redondeado
+                // a seis decimales y multiplicarlo por la cantidad amplifica el redondeo.
+                const currentValue = qty * price;
+                const euros = currentValue - totalCost;
+
+                const pct = totalCost > 0 ? euros / totalCost * 100 : 0;
                 cellPct.textContent = (pct >= 0 ? '+' : '') + pct.toFixed(2) + ' %';
                 color(cellPct, pct);
 
-                const euros = qty * (price - avgCost);
                 cellLatent.textContent = (euros >= 0 ? '+' : '') + euros.toFixed(2) + ' €';
                 color(cellLatent, euros);
                 latentTotal += euros;
+                valuedCost  += totalCost;
+                valuedRows++;
                 renderGlobal();
-
-                const currentValue = qty * price;
 
                 // Variación de la última sesión: la cartera de ayer era la de hoy, así que basta
                 // con valorarla al cierre anterior.
@@ -405,9 +468,12 @@
                 cellPrice.textContent = price.toFixed(2) + ' ' + q.originalCurrency;
                 color(cellPrice, 0);
                 setDash(cellPct, cellLatent, cellPctValue, cellValue);
+                flagUnquoted(row, 'Cotiza en ' + q.originalCurrency
+                    + ' y no se ha podido obtener el tipo de cambio a EUR');
             }
         } catch {
             setDash(cellPrice, cellPct, cellLatent, cellPctValue, cellValue);
+            flagUnquoted(row, 'Sin cotización: no se ha podido contactar con el servicio');
         }
     });
 
@@ -415,6 +481,7 @@
 
     Promise.all(rowPromises).then(() => {
         // Estado final: deja los resúmenes cerrados aunque ninguna cotización se haya resuelto
+        allSettled = true;
         renderGlobal();
         renderPeriods();
 
