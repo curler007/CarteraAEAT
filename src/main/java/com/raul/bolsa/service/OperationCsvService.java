@@ -297,7 +297,7 @@ public class OperationCsvService {
                 operations.size(), userId, mode, parsed.ignoredCount(), parsed.duplicates());
         return new CsvImportResult(FORMAT_INVERSIS, operations.size(), 0,
                 parsed.ignored(), parsed.duplicates(), List.of(),
-                parsed.orphanTransfers(), List.of());
+                parsed.transferWarnings(), List.of());
     }
 
     private void deleteEverythingOf(Long userId) {

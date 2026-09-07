@@ -111,7 +111,7 @@
 
                     <!-- Fila de OPERACIÓN -->
                     <tr th:if="${row.operation != null}"
-                        th:attr="data-isin=${row.operation.assetName},data-qty=${row.operation.quantity},data-total=${row.operation.total},data-remaining=${lotRemainingQty[row.operation.id] ?: row.operation.quantity},data-remaining-cost=${lotRemainingCost[row.operation.id] ?: row.operation.total}"
+                        th:attr="data-isin=${row.operation.assetName},data-qty=${row.operation.quantity},data-total=${row.operation.total},data-remaining=${lotRemainingQty[row.operation.id] ?: row.operation.quantity},data-remaining-cost=${lotRemainingCost[row.operation.id] ?: row.operation.total},data-transfer=${row.operation.transferId}"
                         th:classappend="${row.operation.unvalued} ? 'row-unvalued' : (${row.operation.pending} ? 'table-danger' : (${row.operation.type.reducesPosition()} ? 'table-secondary' : (${lotRowClass[row.operation.id]} ?: '')))">
                         <td th:text="${#temporals.format(row.operation.date, 'dd/MM/yyyy')}"></td>
                         <td>
@@ -121,14 +121,19 @@
                                   class="badge badge-sell">Venta</span>
                             <span th:if="${row.operation.type.name() == 'CANJE'}"
                                   class="badge bg-info text-dark">Canje</span>
-                            <span th:if="${row.operation.type.name() == 'TRASPASO_OUT'}"
-                                  class="badge bg-secondary"
-                                  title="Traspaso a otro fondo: no tributa, el coste viaja con las participaciones">
-                                Traspaso ↗</span>
-                            <span th:if="${row.operation.type.name() == 'TRASPASO_IN'}"
-                                  class="badge bg-secondary"
-                                  title="Traspaso desde otro fondo: hereda el coste y la antigüedad del origen">
-                                Traspaso ↘</span>
+                            <!-- Pulsar el distintivo resalta las demás patas del mismo traspaso:
+                                 un rebalanceo reparte varios fondos entre varios, y ninguna fila
+                                 se entiende sola. -->
+                            <span th:if="${row.operation.type.isTransfer()}"
+                                  class="badge bg-secondary transfer-badge"
+                                  th:classappend="${row.operation.transferId != null} ? 'transfer-link' : ''"
+                                  th:attr="data-bs-toggle=${transferTooltip[row.operation.id] != null ? 'tooltip' : ''},
+                                           data-bs-html='true',
+                                           data-bs-title=${transferTooltip[row.operation.id]},
+                                           data-transfer=${row.operation.transferId}"
+                                  th:text="(${row.operation.type.name() == 'TRASPASO_OUT'} ? 'Traspaso ↗ ' : 'Traspaso ↘ ')
+                                           + (${transferLabel[row.operation.id]} ?: '')">
+                            </span>
                             <span th:if="${row.operation.pending}"
                                   class="badge bg-warning text-dark ms-1"
                                   th:text="'⏳ ' + ${@fmt.qty(row.operation.pendingQty)}">
@@ -187,10 +192,42 @@
     </div>
 </div>
 
+<style>
+    .transfer-link { cursor: pointer; }
+    /* Resaltado del traspaso: un borde lateral, que no pelea con los colores de fila */
+    tr.transfer-highlight > td:first-child { box-shadow: inset 3px 0 0 0 #6c757d; }
+    tr.transfer-highlight { background-color: rgba(108, 117, 125, .12) !important; }
+</style>
+
 <div th:replace="~{fragments/layout :: scripts}"></div>
 <script>
     document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => {
         new bootstrap.Tooltip(el);
+    });
+
+    // Resaltar de un vistazo todas las patas de un mismo traspaso. Se alterna, para poder
+    // apagarlo, y pulsar en otro evento apaga el anterior.
+    document.querySelectorAll('.transfer-link').forEach(badge => {
+        badge.setAttribute('role', 'button');
+        badge.setAttribute('tabindex', '0');
+
+        const toggle = () => {
+            const id = badge.dataset.transfer;
+            const rows = Array.from(document.querySelectorAll('#opsTable tbody tr'))
+                    .filter(r => r.dataset.transfer === id);
+            const on = rows.length && rows[0].classList.contains('transfer-highlight');
+            document.querySelectorAll('tr.transfer-highlight')
+                    .forEach(r => r.classList.remove('transfer-highlight'));
+            if (!on) rows.forEach(r => r.classList.add('transfer-highlight'));
+        };
+
+        badge.addEventListener('click', toggle);
+        badge.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                toggle();
+            }
+        });
     });
 
     const tickerFilter  = document.getElementById('tickerFilter');
