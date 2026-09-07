@@ -6,6 +6,7 @@ import com.raul.bolsa.domain.IsinTwin;
 import com.raul.bolsa.domain.OperationType;
 import com.raul.bolsa.repository.AppUserRepository;
 import com.raul.bolsa.repository.IsinTwinRepository;
+import com.raul.bolsa.repository.OperationRepository;
 import com.raul.bolsa.security.AppUserPrincipal;
 import com.raul.bolsa.service.IsinTwinService;
 import com.raul.bolsa.service.OperationService;
@@ -14,6 +15,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInfo;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -60,29 +62,22 @@ class IsinTwinsPageTest {
     @Autowired MockMvc mvc;
     @Autowired AppUserRepository userRepo;
     @Autowired IsinTwinRepository twinRepo;
+    @Autowired OperationRepository operationRepo;
     @Autowired OperationService operationService;
     @Autowired IsinTwinService twinService;
 
     private Long uid;
 
     @BeforeEach
-    void setUp() {
-        AppUser user = TestUsers.create(userRepo, "twins");
+    void setUp(TestInfo info) {
+        // Un usuario por método: los tres comparten el mismo fichero de base de datos, y con un
+        // usuario común cada test heredaría las operaciones y los estados que sembró el anterior.
+        AppUser user = TestUsers.create(userRepo, "twins-" + info.getTestMethod().orElseThrow().getName());
         uid = user.getId();
         SecurityContextHolder.getContext().setAuthentication(
                 new UsernamePasswordAuthenticationToken(new AppUserPrincipal(user), null, List.of()));
 
-        OperationForm f = new OperationForm();
-        f.setDate(LocalDate.parse("2024-01-10"));
-        f.setType(OperationType.BUY);
-        f.setTicker("IE00BMVB5P51");
-        f.setAssetName("IE00BMVB5P51");
-        f.setBroker("MyInvestor");
-        f.setQuantity(new BigDecimal("100"));
-        f.setTotal(new BigDecimal("1000"));
-        f.setCommission(BigDecimal.ZERO);
-        f.setAeatGroup(AeatGroup.GROUP_2);
-        operationService.save(uid, f);
+        operationService.save(uid, form());
 
         IsinTwin seeded = new IsinTwin();
         seeded.setUserId(uid);
@@ -99,6 +94,20 @@ class IsinTwinsPageTest {
         SecurityContextHolder.clearContext();
     }
 
+    private static OperationForm form() {
+        OperationForm f = new OperationForm();
+        f.setDate(LocalDate.parse("2024-01-10"));
+        f.setType(OperationType.BUY);
+        f.setTicker("IE00BMVB5P51");
+        f.setAssetName("IE00BMVB5P51");
+        f.setBroker("MyInvestor");
+        f.setQuantity(new BigDecimal("100"));
+        f.setTotal(new BigDecimal("1000"));
+        f.setCommission(BigDecimal.ZERO);
+        f.setAeatGroup(AeatGroup.GROUP_2);
+        return f;
+    }
+
     @Test
     @DisplayName("Un ISIN ya resuelto no se vuelve a consultar a Yahoo")
     void resolvedIsinIsNotCheckedAgain() {
@@ -109,6 +118,29 @@ class IsinTwinsPageTest {
                 "lo ya resuelto debe salir de la base, no de una consulta nueva");
         assertEquals(LocalDate.parse("2026-01-01"), statuses.get(0).getCheckedAt(),
                 "si se hubiera vuelto a comprobar, la fecha sería la de hoy");
+    }
+
+    @Test
+    @DisplayName("Cambiar el ISIN de una operación deja de dar por bueno el anterior")
+    void changingTheIsinMovesTheFlag() {
+        // Un verde sembrado para el ISIN al que vamos a cambiar, para no depender de la red
+        IsinTwin otro = new IsinTwin();
+        otro.setUserId(uid);
+        otro.setIsin("IE000N4ZYX28");
+        otro.setResolvedSymbol("OTRO-SIMBOLO");
+        otro.setHistoryFrom(LocalDate.parse("2025-08-26"));
+        otro.setCheckedAt(LocalDate.parse("2026-01-01"));
+        twinRepo.save(otro);
+
+        Long opId = operationRepo.findByUserId(uid).get(0).getId();
+        OperationForm cambio = form();
+        cambio.setTicker("IE000N4ZYX28");
+        cambio.setAssetName("IE000N4ZYX28");
+        operationService.update(uid, opId, cambio);
+
+        List<String> isins = twinService.statuses(uid).stream().map(IsinTwin::getIsin).toList();
+        assertEquals(List.of("IE000N4ZYX28"), isins,
+                "el estado sigue al ISIN de las operaciones, no a la operación");
     }
 
     @Test
