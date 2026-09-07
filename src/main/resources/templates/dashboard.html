@@ -92,6 +92,21 @@
         </div>
     </div>
 
+    <!--
+      Recorrido completo de la cartera, deliberadamente discreto: el latente de arriba es lo que
+      se mira a diario, y esto es el contexto de fondo. Sin color ni negrita, para no competir.
+    -->
+    <div class="border rounded px-3 py-2 mb-3 small text-muted"
+         th:unless="${#lists.isEmpty(portfolio)}">
+        <span class="text-uppercase me-3">Desde el principio</span>
+        Comprado
+        <span class="text-body" th:text="${#numbers.formatDecimal(totalInvested, 1, 'POINT', 2, 'COMMA') + ' €'}"></span>
+        <span class="mx-2">·</span>
+        Ganado
+        <span class="text-body" id="lifetime-gain">…</span><span id="lifetime-pct"></span>
+        <span id="lifetime-breakdown"></span>
+    </div>
+
     <div class="d-flex justify-content-end mb-2" th:unless="${#lists.isEmpty(portfolio)}">
         <button type="button" id="toggleOptionalCols" class="btn btn-outline-secondary btn-sm">
             <i class="bi bi-eye me-1"></i>Mostrar precios
@@ -298,6 +313,13 @@
         p.pctEl = document.getElementById(p.pct);
     });
 
+    // Ganancia realizada en ventas pasadas. La latente se le suma cuando llegan las cotizaciones.
+    const realizedGain     = [[${realizedGain}]];
+    const totalInvested    = [[${totalInvested}]];
+    const lifetimeGain     = document.getElementById('lifetime-gain');
+    const lifetimePct      = document.getElementById('lifetime-pct');
+    const lifetimeBreakdown = document.getElementById('lifetime-breakdown');
+
     const globalValue    = document.getElementById('global-value');
     const globalDelta    = document.getElementById('global-delta');
     const globalUnvalued = document.getElementById('global-unvalued');
@@ -319,6 +341,33 @@
         globalDelta.textContent = '(' + signedEur(latentTotal) + '  ' + signedPct(pct) + ')';
         globalDelta.style.color = c;
         renderUnvalued();
+        renderLifetime();
+    }
+
+    /**
+     * Lo ganado desde el principio: lo que ya se materializó en ventas más lo que sigue en el
+     * aire. Se pinta sin color a propósito; el semáforo es cosa de la tarjeta Global.
+     */
+    function renderLifetime() {
+        if (!lifetimeGain) return;
+        // Sin ninguna cotización resuelta, la parte latente no es cero: es desconocida, y sumarla
+        // como cero daría por bueno un total que no lo es.
+        if (allSettled && valuedCost <= 0) {
+            lifetimeGain.textContent = '—';
+            lifetimePct.textContent = '';
+            lifetimeBreakdown.textContent = '(' + signedEur(realizedGain)
+                + ' realizado · latente sin valorar)';
+            return;
+        }
+        const gain = realizedGain + latentTotal;
+        lifetimeGain.textContent = signedEur(gain);
+        // Qué parte de todo lo comprado ha acabado siendo beneficio. Aquí sí cabe un porcentaje:
+        // numerador y denominador son independientes, así que nada se cuenta dos veces.
+        lifetimePct.textContent = totalInvested > 0
+            ? '  ·  ' + signedPct(gain / totalInvested * 100) + ' de lo comprado'
+            : '';
+        lifetimeBreakdown.textContent = '(' + signedEur(realizedGain) + ' realizado · '
+            + signedEur(latentTotal) + ' latente)';
     }
 
     /**

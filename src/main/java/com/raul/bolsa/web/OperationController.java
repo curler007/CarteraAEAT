@@ -72,7 +72,8 @@ public class OperationController {
                 ));
 
         // Ventas agrupadas por año y ticker para el resumen del dashboard
-        List<SaleYearSummary> salesByYear = saleRecordRepo.findByUserId(uid).stream()
+        List<SaleRecord> allSales = saleRecordRepo.findByUserId(uid);
+        List<SaleYearSummary> salesByYear = allSales.stream()
                 .collect(Collectors.groupingBy(
                         SaleRecord::getTaxYear,
                         TreeMap::new,
@@ -127,6 +128,15 @@ public class OperationController {
         model.addAttribute("totalCost", totalCost);
         model.addAttribute("salesByYear", salesByYear);
         model.addAttribute("unvalued", unvaluedOperations(uid));
+
+        // Recorrido completo de la cartera: cuánto dinero ha entrado desde el principio y cuánto
+        // se ha ganado con él, contando también lo que ya se vendió. La parte latente la suma el
+        // navegador, que es quien tiene las cotizaciones.
+        model.addAttribute("totalInvested",
+                operationRepo.sumTotalByUserIdAndType(uid, OperationType.BUY));
+        model.addAttribute("realizedGain", allSales.stream()
+                .map(SaleRecord::getGainLoss)
+                .reduce(BigDecimal.ZERO, BigDecimal::add));
 
         // Punto de partida de cada periodo de la cabecera, por ISIN
         java.time.LocalDate today = java.time.LocalDate.now();

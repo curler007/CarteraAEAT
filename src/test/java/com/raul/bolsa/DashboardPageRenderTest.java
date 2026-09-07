@@ -30,6 +30,7 @@ import java.time.LocalDate;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -92,6 +93,18 @@ class DashboardPageRenderTest {
 
         // El punto de partida de cada periodo viaja en la fila, no en el JavaScript
         assertTrue(html.contains("data-held-year="), "falta la base del periodo anual");
+
+        // Recorrido completo: lo invertido lo pinta Thymeleaf, lo ganado lo completa el navegador
+        assertTrue(html.contains("Desde el principio"), "falta el resumen de toda la vida");
+        assertTrue(html.contains("Comprado"), "falta la etiqueta de lo comprado");
+        assertTrue(html.contains("1.500,00 €"), "lo comprado no suma las dos compras");
+        assertTrue(html.contains("id=\"lifetime-gain\""), "falta el hueco de lo ganado");
+        assertTrue(html.contains("id=\"lifetime-pct\""), "falta el hueco del porcentaje");
+
+        // Las expresiones dentro de <script> tienen que haberse sustituido por números: si el
+        // inlining dejase de aplicarse, el JavaScript reventaría entero y la página se quedaría
+        // muda sin que ningún test lo notara.
+        assertFalse(html.contains("[[${"), "quedan expresiones de Thymeleaf sin sustituir");
     }
 
     private static OperationForm form(OperationType type, String date, String isin,
