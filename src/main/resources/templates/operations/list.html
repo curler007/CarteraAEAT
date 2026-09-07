@@ -208,13 +208,25 @@
     // Resaltar de un vistazo todas las patas de un mismo traspaso. Se alterna, para poder
     // apagarlo, y pulsar en otro evento apaga el anterior.
     document.querySelectorAll('.transfer-link').forEach(badge => {
-        badge.addEventListener('click', () => {
+        badge.setAttribute('role', 'button');
+        badge.setAttribute('tabindex', '0');
+
+        const toggle = () => {
             const id = badge.dataset.transfer;
-            const rows = document.querySelectorAll(`#opsTable tbody tr[data-transfer="${id}"]`);
+            const rows = Array.from(document.querySelectorAll('#opsTable tbody tr'))
+                    .filter(r => r.dataset.transfer === id);
             const on = rows.length && rows[0].classList.contains('transfer-highlight');
             document.querySelectorAll('tr.transfer-highlight')
                     .forEach(r => r.classList.remove('transfer-highlight'));
             if (!on) rows.forEach(r => r.classList.add('transfer-highlight'));
+        };
+
+        badge.addEventListener('click', toggle);
+        badge.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                toggle();
+            }
         });
     });
 
