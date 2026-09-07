@@ -103,7 +103,9 @@
         <span class="text-body" th:text="${#numbers.formatDecimal(totalInvested, 1, 'POINT', 2, 'COMMA') + ' €'}"></span>
         <span class="mx-2">·</span>
         Ganado
-        <span class="text-body" id="lifetime-gain">…</span><span id="lifetime-pct"></span>
+        <span class="text-body" id="lifetime-gain">…</span><span id="lifetime-pct"></span><span
+              id="irr-flag" class="ms-1" data-bs-toggle="tooltip" hidden><i
+              class="bi bi-exclamation-triangle-fill text-warning"></i></span>
         <span id="lifetime-breakdown"></span>
     </div>
 
@@ -225,7 +227,12 @@
 </div>
 
 <div th:replace="~{fragments/layout :: scripts}"></div>
-<script>
+<!--
+  th:inline="javascript" hace falta para los flujos de la TIR: sin él, [[...]] lo procesa el
+  inliner de texto, que a una lista le aplica el toString() de Java y escupe algo que el navegador
+  no sabe leer. Con él, Thymeleaf los serializa a JSON. Los números siguen saliendo igual.
+-->
+<script th:inline="javascript">
     // ── Mostrar/ocultar columnas de precios ───────────────────────────────────
     (function () {
         const btn = document.getElementById('toggleOptionalCols');
@@ -316,8 +323,10 @@
     // Ganancia realizada en ventas pasadas. La latente se le suma cuando llegan las cotizaciones.
     const realizedGain     = [[${realizedGain}]];
     const totalInvested    = [[${totalInvested}]];
+    const cashFlows        = [[${cashFlows}]];
     const lifetimeGain     = document.getElementById('lifetime-gain');
     const lifetimePct      = document.getElementById('lifetime-pct');
+    const irrFlag          = document.getElementById('irr-flag');
     const lifetimeBreakdown = document.getElementById('lifetime-breakdown');
 
     const globalValue    = document.getElementById('global-value');
@@ -348,6 +357,39 @@
      * Lo ganado desde el principio: lo que ya se materializó en ventas más lo que sigue en el
      * aire. Se pinta sin color a propósito; el semáforo es cosa de la tarjeta Global.
      */
+    /**
+     * TIR anualizada de una serie de flujos con fecha (XIRR): el tipo al que habría que descontar
+     * todo lo aportado y lo recuperado para que sumase cero con el valor de hoy.
+     *
+     * <p>Se resuelve por bisección y no por Newton: no necesita derivada, no se escapa a un
+     * mínimo local y, con el intervalo acotado, o converge o dice que no. Devuelve null cuando no
+     * hay cambio de signo en el intervalo, que es cuando la TIR sencillamente no existe.
+     *
+     * @param flows pares {t, a}: años transcurridos desde el primer movimiento e importe
+     */
+    function xirr(flows) {
+        const npv = r => flows.reduce((sum, f) => sum + f.a / Math.pow(1 + r, f.t), 0);
+        let lo = -0.9999, hi = 10;
+        let flo = npv(lo), fhi = npv(hi);
+        if (!isFinite(flo) || !isFinite(fhi) || flo * fhi > 0) return null;
+        for (let i = 0; i < 200; i++) {
+            const mid = (lo + hi) / 2;
+            const fmid = npv(mid);
+            if (flo * fmid <= 0) { hi = mid; } else { lo = mid; flo = fmid; }
+        }
+        return (lo + hi) / 2;
+    }
+
+    /** Flujos con el valor de hoy como último apunte, medidos en años desde el primero. */
+    function flowsWithToday(currentValue) {
+        if (!cashFlows || cashFlows.length === 0) return null;
+        const start = new Date(cashFlows[0].date).getTime();
+        const years = ms => (ms - start) / (365 * 24 * 3600 * 1000);
+        const flows = cashFlows.map(f => ({ t: years(new Date(f.date).getTime()), a: f.amount }));
+        flows.push({ t: years(Date.now()), a: currentValue });
+        return flows;
+    }
+
     function renderLifetime() {
         if (!lifetimeGain) return;
         // Sin ninguna cotización resuelta, la parte latente no es cero: es desconocida, y sumarla
@@ -355,19 +397,46 @@
         if (allSettled && valuedCost <= 0) {
             lifetimeGain.textContent = '—';
             lifetimePct.textContent = '';
+            irrFlag.hidden = true;
             lifetimeBreakdown.textContent = '(' + signedEur(realizedGain)
                 + ' realizado · latente sin valorar)';
             return;
         }
         const gain = realizedGain + latentTotal;
         lifetimeGain.textContent = signedEur(gain);
-        // Qué parte de todo lo comprado ha acabado siendo beneficio. Aquí sí cabe un porcentaje:
-        // numerador y denominador son independientes, así que nada se cuenta dos veces.
-        lifetimePct.textContent = totalInvested > 0
-            ? '  ·  ' + signedPct(gain / totalInvested * 100) + ' de lo comprado'
-            : '';
         lifetimeBreakdown.textContent = '(' + signedEur(realizedGain) + ' realizado · '
             + signedEur(latentTotal) + ' latente)';
+        renderIrr();
+    }
+
+    /**
+     * TIR anualizada de la cartera. A diferencia de la ganancia acumulada, tiene en cuenta cuándo
+     * entró cada euro, así que sí es comparable con la rentabilidad anual de un fondo o un índice.
+     *
+     * <p>El valor final es el mismo que enseña la tarjeta Global, con lo que no cotiza valorado a
+     * su coste. Eso deja la TIR corta, porque a esas posiciones se les está negando cualquier
+     * ganancia, y por eso la cifra se marca en vez de callarse: sigue siendo informativa.
+     */
+    function renderIrr() {
+        const flows = flowsWithToday(totalCost + latentTotal);
+        const rate = flows && xirr(flows);
+        if (rate == null) { lifetimePct.textContent = ''; irrFlag.hidden = true; return; }
+
+        lifetimePct.textContent = '  ·  TIR ' + signedPct(rate * 100) + ' anual';
+
+        const pendingCost = totalCost - valuedCost;
+        irrFlag.hidden = !(allSettled && pendingCost > 0.005);
+        if (!irrFlag.hidden) {
+            const n = rows.length - valuedRows;
+            irrFlag.setAttribute('data-bs-title',
+                'TIR aproximada y sesgada a la baja: ' + n
+                + (n === 1 ? ' posición sin cotización se valora' : ' posiciones sin cotización se valoran')
+                + ' a su coste (' + eur2.format(pendingCost) + ' €), sin ganancia ninguna.');
+            if (!irrFlag.dataset.armed) {
+                new bootstrap.Tooltip(irrFlag);
+                irrFlag.dataset.armed = '1';
+            }
+        }
     }
 
     /**

@@ -24,6 +24,7 @@ import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -137,6 +138,7 @@ public class OperationController {
         model.addAttribute("realizedGain", allSales.stream()
                 .map(SaleRecord::getGainLoss)
                 .reduce(BigDecimal.ZERO, BigDecimal::add));
+        model.addAttribute("cashFlows", cashFlows(uid));
 
         // Punto de partida de cada periodo de la cabecera, por ISIN
         java.time.LocalDate today = java.time.LocalDate.now();
@@ -355,6 +357,29 @@ public class OperationController {
      * Operaciones que entraron sin coste conocido. Se avisa de ellas en el dashboard y en el
      * listado mientras sigan a cero: es un dato que falta y que falsea la ganancia al vender.
      */
+    /**
+     * Movimientos de dinero de la cartera, un apunte por día, en orden cronológico. Las compras
+     * salen en negativo y las ventas en positivo; los traspasos y los canjes no aparecen, porque
+     * no mueven dinero.
+     *
+     * <p>Se agrupan por día para no mandar al navegador cientos de apuntes del mismo día: la TIR
+     * da el mismo resultado y la página baja de tamaño.
+     */
+    private List<com.raul.bolsa.web.dto.CashFlow> cashFlows(Long userId) {
+        Map<LocalDate, BigDecimal> byDay = new TreeMap<>();
+        for (Operation op : operationRepo.findByUserId(userId)) {
+            BigDecimal amount = switch (op.getType()) {
+                case BUY -> op.getTotal().negate();
+                case SELL -> op.getTotal();
+                default -> null;
+            };
+            if (amount != null) byDay.merge(op.getDate(), amount, BigDecimal::add);
+        }
+        return byDay.entrySet().stream()
+                .map(e -> new com.raul.bolsa.web.dto.CashFlow(e.getKey().toString(), e.getValue()))
+                .toList();
+    }
+
     private List<Operation> unvaluedOperations(Long userId) {
         return operationRepo.findByUserIdAndTypeNotAndTotalLessThanEqualOrderByDateAscIdAsc(
                 userId, OperationType.CANJE, BigDecimal.ZERO);

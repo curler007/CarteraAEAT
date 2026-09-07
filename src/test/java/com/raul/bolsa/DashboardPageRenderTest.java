@@ -100,6 +100,12 @@ class DashboardPageRenderTest {
         assertTrue(html.contains("1.500,00 €"), "lo comprado no suma las dos compras");
         assertTrue(html.contains("id=\"lifetime-gain\""), "falta el hueco de lo ganado");
         assertTrue(html.contains("id=\"lifetime-pct\""), "falta el hueco del porcentaje");
+        assertTrue(html.contains("id=\"irr-flag\""), "falta la marca de TIR aproximada");
+
+        // Los flujos de caja de la TIR viajan serializados a JSON. Si el inlining los escupiera
+        // como un toString() de Java, el navegador no podría leerlos y la TIR no saldría.
+        assertTrue(html.contains("\"date\":\"2024-01-10\""), "los flujos no llegan como JSON");
+        assertTrue(html.contains("-1000"), "la compra debe ser un flujo negativo");
 
         // Las expresiones dentro de <script> tienen que haberse sustituido por números: si el
         // inlining dejase de aplicarse, el JavaScript reventaría entero y la página se quedaría
