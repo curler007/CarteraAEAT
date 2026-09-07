@@ -27,10 +27,15 @@ public class QuoteService {
     private static final String CHART_URL =
             "https://query1.finance.yahoo.com/v8/finance/chart/%s?%s";
     /**
-     * Query del chart para cotizaciones. La ventana de un año da, en una sola llamada, el cierre
-     * de la sesión anterior y los de hace una semana, un mes y un año.
+     * Query del chart para cotizaciones. Da, en una sola llamada, el cierre de la sesión anterior
+     * y los de hace una semana, un mes y un año.
+     *
+     * <p>La ventana es de dos años y no de uno porque {@code range=1y} arranca justo en la fecha
+     * de hace un año: en la práctica su primera sesión cae ya <em>después</em> de esa fecha (los
+     * mercados europeos la devuelven siempre así), no hay ningún cierre anterior al que referirse
+     * y el periodo anual se quedaba sin referencia de mercado.
      */
-    private static final String QUOTE_CHART_QUERY = "interval=1d&range=1y";
+    private static final String QUOTE_CHART_QUERY = "interval=1d&range=2y";
 
     /** ISINs no estándar que Yahoo Finance no reconoce → símbolo preferido en EUR, fallback en USD */
     private static final Map<String, String[]> ISIN_SYMBOL_OVERRIDE = Map.of(
