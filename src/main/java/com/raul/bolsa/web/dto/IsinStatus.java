@@ -1,14 +1,11 @@
 package com.raul.bolsa.web.dto;
 
 /**
- * Si Yahoo Finance publica cotizaciones de un ISIN.
+ * Si Yahoo Finance publica cotizaciones de un ISIN, y con qué símbolo.
  *
- * <p>Sirve para poder corregir el dato: un ISIN mal escrito, o el de una clase de participaciones
- * que Yahoo solo lista en un mercado secundario sin histórico, deja la posición sin variaciones
- * por periodo, y hasta ahora eso no se veía por ningún sitio.
- *
- * @param since       primera operación del valor, para poder juzgar si el histórico llega o no
- * @param symbol      símbolo al que Yahoo resuelve el ISIN, o null si no resuelve a ninguno
- * @param historyFrom primer día con cierre publicado, o null si Yahoo no publica serie
+ * @param twin        símbolo gemelo puesto a mano, o null si nadie lo ha puesto
+ * @param found       Yahoo publica histórico utilizable: es lo que hace falta para los periodos
+ * @param symbol      símbolo con el que se cotiza, o el que resolvió Yahoo aunque no sirviera
+ * @param historyFrom primer día con cierre publicado, o null si no hay serie
  */
-public record IsinStatus(String isin, String since, boolean found, String symbol, String historyFrom) {}
+public record IsinStatus(String isin, String twin, boolean found, String symbol, String historyFrom) {}

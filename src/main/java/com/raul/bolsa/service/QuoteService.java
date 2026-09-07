@@ -62,6 +62,27 @@ public class QuoteService {
         this.rest = new RestTemplate(factory);
     }
 
+    /**
+     * Cotización de un ISIN, probando antes su gemelo si lo tiene.
+     *
+     * <p>El gemelo llega como parámetro y no se busca aquí a propósito: quien lo guarda necesita
+     * cotizar para comprobarlo, y si este servicio fuese a buscarlo los dos se llamarían en
+     * círculo. Si el gemelo falla se sigue por el camino de siempre, que es lo prudente cuando el
+     * símbolo lo ha escrito una persona.
+     */
+    public Optional<QuoteResult> getQuote(String isin, String twin) {
+        if (twin != null && !twin.isBlank()) {
+            try {
+                Optional<QuoteResult> byTwin = fetchQuote(twin.trim());
+                if (byTwin.isPresent()) return byTwin;
+                log.debug("El gemelo {} de {} no devolvió precio; se prueba el ISIN", twin, isin);
+            } catch (Exception e) {
+                log.warn("No se pudo cotizar el gemelo {} de {}: {}", twin, isin, e.getMessage());
+            }
+        }
+        return getQuote(isin);
+    }
+
     public Optional<QuoteResult> getQuote(String isin) {
         if (!looksLikeIsin(isin)) return Optional.empty();
         try {
@@ -218,7 +239,16 @@ public class QuoteService {
          * equivocado, que es lo que esto busca destapar.
          */
         public Optional<Series> seriesOf(String isin) {
-            for (String symbol : symbols.computeIfAbsent(isin, QuoteService.this::candidateSymbols)) {
+            return firstUsable(symbols.computeIfAbsent(isin, QuoteService.this::candidateSymbols));
+        }
+
+        /** Igual, pero sobre un símbolo dado a mano: es como se comprueba un gemelo. */
+        public Optional<Series> seriesOfSymbol(String symbol) {
+            return firstUsable(List.of(symbol));
+        }
+
+        private Optional<Series> firstUsable(List<String> candidates) {
+            for (String symbol : candidates) {
                 JsonNode result = charts.computeIfAbsent(symbol, this::chart);
                 if (result == null) continue;
                 List<LocalDate> days = tradingDays(result);

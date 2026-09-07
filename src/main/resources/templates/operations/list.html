@@ -210,12 +210,12 @@
                 + ', con histórico desde ' + esFecha(status.historyFrom) + '.';
         }
         if (!status.symbol) {
-            return 'El ISIN ' + status.isin + ' no se encuentra en Yahoo. '
-                + 'Esta posición se queda sin precio y sin variaciones por periodo.';
+            return 'El ISIN ' + status.isin + ' no se encuentra en Yahoo. Ponle un gemelo en '
+                + 'Gemelos para poder cotizarlo; el ISIN de la operación no se toca.';
         }
         return 'El ISIN ' + status.isin + ' resuelve en Yahoo a ' + status.symbol
-            + ', que publica precio pero no histórico. Las variaciones por periodo de esta '
-            + 'posición caen a su coste.';
+            + ', que publica precio pero no histórico, así que sus variaciones por periodo caen a '
+            + 'su coste. Ponle un gemelo en Gemelos.';
     }
 
     // Verde si Yahoo sabe darle precio desde que el valor está en cartera; rojo si no, que es
