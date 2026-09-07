@@ -3,6 +3,8 @@ package com.raul.bolsa.repository;
 import com.raul.bolsa.domain.Operation;
 import com.raul.bolsa.domain.OperationType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -20,6 +22,16 @@ public interface OperationRepository extends JpaRepository<Operation, Long> {
     List<Operation> findByUserIdAndTickerOrderByDateAscIdAsc(Long userId, String ticker);
 
     List<Operation> findByUserId(Long userId);
+
+    /**
+     * Suma de los importes de un tipo de operación. Con {@code BUY} da el dinero que ha entrado
+     * en la cartera a lo largo de su vida: los traspasos quedan fuera a propósito, porque no son
+     * dinero nuevo sino el mismo coste cambiando de fondo.
+     */
+    @Query("SELECT COALESCE(SUM(o.total), 0) FROM Operation o "
+            + "WHERE o.userId = :userId AND o.type = :type")
+    BigDecimal sumTotalByUserIdAndType(@Param("userId") Long userId,
+                                       @Param("type") OperationType type);
 
     /**
      * Operaciones que entraron sin coste conocido, en orden cronológico. Se excluyen los CANJE,
