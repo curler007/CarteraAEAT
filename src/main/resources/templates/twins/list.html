@@ -14,6 +14,13 @@
         cuatro listados del Vanguard LifeStrategy 60 cotizan dentro de un 0,12 % entre sí.
     </div>
 
+    <div th:if="${pendientes > 0}" class="alert alert-warning py-2 small">
+        <i class="bi bi-exclamation-triangle-fill me-1"></i>
+        <span th:text="${pendientes}"></span>
+        <span th:text="${pendientes == 1} ? 'valor sin resolver, arriba del todo.' : 'valores sin resolver, arriba del todo.'"></span>
+        Mientras sigan así, sus variaciones por periodo caen a su coste.
+    </div>
+
     <div th:if="${success}" class="alert alert-success" th:text="${success}"></div>
     <div th:if="${error}" class="alert alert-warning" th:text="${error}"></div>
 
