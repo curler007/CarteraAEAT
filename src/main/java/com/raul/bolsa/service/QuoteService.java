@@ -24,7 +24,7 @@ import java.util.Optional;
 public class QuoteService {
 
     private static final String SEARCH_URL =
-            "https://query2.finance.yahoo.com/v1/finance/search?q=%s&quotesCount=1&newsCount=0";
+            "https://query2.finance.yahoo.com/v1/finance/search?q=%s&quotesCount=%d&newsCount=0";
     private static final String CHART_URL =
             "https://query1.finance.yahoo.com/v8/finance/chart/%s?%s";
     /**
@@ -138,8 +138,43 @@ public class QuoteService {
         return s != null && s.matches("[A-Z]{2}[A-Z0-9]{10}");
     }
 
+    /**
+     * Lo que Yahoo ofrece al buscar un ISIN, con nombre y mercado para poder distinguirlos.
+     *
+     * <p>La resolución automática se queda con el primero y por eso falla tanto: en los fondos, el
+     * primero suele ser un listado secundario alemán sin histórico y el bueno viene detrás. Esto
+     * es para enseñárselos todos a quien tenga que elegir.
+     */
+    public List<SearchHit> search(String isin, int count) {
+        try {
+            String url = String.format(SEARCH_URL, isin, count);
+            String body = rest.exchange(url, HttpMethod.GET, httpEntity(), String.class).getBody();
+            if (body == null) return List.of();
+            List<SearchHit> hits = new ArrayList<>();
+            for (JsonNode q : mapper.readTree(body).path("quotes")) {
+                String symbol = q.path("symbol").asText(null);
+                if (symbol == null) continue;
+                hits.add(new SearchHit(symbol,
+                        firstNonBlank(q.path("longname").asText(null), q.path("shortname").asText(null)),
+                        firstNonBlank(q.path("exchDisp").asText(null), q.path("exchange").asText(null))));
+            }
+            return hits;
+        } catch (Exception e) {
+            log.warn("No se pudo buscar {} en Yahoo: {}", isin, e.getMessage());
+            return List.of();
+        }
+    }
+
+    /** Un resultado de la búsqueda de Yahoo, sin comprobar todavía si tiene histórico. */
+    public record SearchHit(String symbol, String name, String exchange) {}
+
+    private static String firstNonBlank(String a, String b) {
+        if (a != null && !a.isBlank()) return a;
+        return b == null || b.isBlank() ? null : b;
+    }
+
     private String resolveSymbol(String isin) throws Exception {
-        String url = String.format(SEARCH_URL, isin);
+        String url = String.format(SEARCH_URL, isin, 1);
         String body = rest.exchange(url, HttpMethod.GET, httpEntity(), String.class).getBody();
         if (body == null) return null;
         JsonNode quotes = mapper.readTree(body).path("quotes");

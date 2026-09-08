@@ -1,6 +1,7 @@
 package com.raul.bolsa.web;
 
 import com.raul.bolsa.domain.IsinTwin;
+import com.raul.bolsa.web.dto.TwinCandidate;
 import com.raul.bolsa.security.CurrentUser;
 import com.raul.bolsa.service.IsinTwinService;
 import lombok.RequiredArgsConstructor;
@@ -9,6 +10,7 @@ import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseBody;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 import java.time.format.DateTimeFormatter;
@@ -39,6 +41,13 @@ public class IsinTwinController {
         model.addAttribute("twins", twins);
         model.addAttribute("pendientes", twins.stream().filter(t -> !t.isResolved()).count());
         return "twins/list";
+    }
+
+    /** Listados que Yahoo ofrece para un ISIN, ya comprobados, para poder elegir uno. */
+    @GetMapping("/api/gemelos/candidatos")
+    @ResponseBody
+    public List<TwinCandidate> candidates(@RequestParam String isin) {
+        return twinService.candidates(isin);
     }
 
     @PostMapping("/gemelos")

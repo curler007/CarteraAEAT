@@ -53,11 +53,17 @@
                         <span th:unless="${t.historyFrom}" class="text-danger">sin histórico</span>
                     </td>
                     <td colspan="2">
-                        <form method="post" th:action="@{/gemelos}" class="d-flex gap-2">
+                        <form method="post" th:action="@{/gemelos}" class="d-flex gap-2 flex-wrap"
+                              th:attr="data-isin=${t.isin}">
                             <input type="hidden" name="isin" th:value="${t.isin}"/>
-                            <input type="text" name="twin" class="form-control form-control-sm"
-                                   style="max-width:14rem" placeholder="p. ej. V60A.AS"
+                            <input type="text" name="twin" class="form-control form-control-sm twin-input"
+                                   style="max-width:12rem" placeholder="p. ej. V60A.AS"
                                    th:value="${t.twin}"/>
+                            <button type="button" class="btn btn-outline-secondary btn-sm buscar">
+                                <i class="bi bi-search me-1"></i>Buscar en Yahoo
+                            </button>
+                            <select class="form-select form-select-sm candidatos d-none"
+                                    style="max-width:26rem"></select>
                             <button type="submit" class="btn btn-outline-primary btn-sm">Comprobar</button>
                         </form>
                     </td>
@@ -69,5 +75,63 @@
 </div>
 
 <div th:replace="~{fragments/layout :: scripts}"></div>
+<script>
+    // ── Buscar listados en Yahoo ──────────────────────────────────────────────
+    // Va bajo demanda y no al cargar la página: comprobar cada candidato es descargar su serie,
+    // y hacerlo para todos los ISIN de golpe sería una espera larga para nada.
+    const esFecha = iso => iso.slice(8, 10) + '/' + iso.slice(5, 7) + '/' + iso.slice(0, 4);
+
+    function etiqueta(c) {
+        const donde = [c.name, c.exchange].filter(Boolean).join(' · ');
+        const historico = c.historyFrom
+            ? 'desde ' + esFecha(c.historyFrom)
+            : 'SIN HISTÓRICO';
+        return c.symbol + (donde ? '  ·  ' + donde : '') + '  ·  ' + historico;
+    }
+
+    document.querySelectorAll('form[data-isin]').forEach(form => {
+        const boton  = form.querySelector('.buscar');
+        const select = form.querySelector('.candidatos');
+        const input  = form.querySelector('.twin-input');
+
+        boton.addEventListener('click', async () => {
+            boton.disabled = true;
+            const original = boton.innerHTML;
+            boton.textContent = 'Buscando…';
+            try {
+                const resp = await fetch('/api/gemelos/candidatos?isin='
+                    + encodeURIComponent(form.dataset.isin));
+                const candidatos = resp.ok ? await resp.json() : [];
+                select.innerHTML = '';
+                if (candidatos.length === 0) {
+                    select.innerHTML = '<option>Yahoo no ofrece ningún listado</option>';
+                    select.disabled = true;
+                } else {
+                    // Sin selección previa: elegir por accidente al desplegar sería peor que nada
+                    select.appendChild(new Option('Elige un listado…', ''));
+                    candidatos.forEach(c => {
+                        const opcion = new Option(etiqueta(c), c.symbol);
+                        // Los que no publican serie se ofrecen igual, porque a veces son el único
+                        // sitio donde el valor cotiza, pero se avisa de lo que dejan sin cubrir
+                        if (!c.historyFrom) opcion.style.color = '#dc3545';
+                        select.appendChild(opcion);
+                    });
+                    select.disabled = false;
+                }
+                select.classList.remove('d-none');
+                boton.classList.add('d-none');
+            } catch {
+                boton.disabled = false;
+                boton.innerHTML = original;
+            }
+        });
+
+        // Elegir del desplegable solo rellena la casilla: guardar sigue siendo pulsar Comprobar,
+        // que es lo que verifica el símbolo de verdad antes de darlo por bueno.
+        select.addEventListener('change', () => {
+            if (select.value) input.value = select.value;
+        });
+    });
+</script>
 </body>
 </html>

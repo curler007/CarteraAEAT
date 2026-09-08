@@ -4,6 +4,7 @@ import com.raul.bolsa.domain.IsinTwin;
 import com.raul.bolsa.domain.Operation;
 import com.raul.bolsa.repository.IsinTwinRepository;
 import com.raul.bolsa.repository.OperationRepository;
+import com.raul.bolsa.web.dto.TwinCandidate;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -30,6 +31,9 @@ import java.util.stream.Collectors;
 @Slf4j
 @RequiredArgsConstructor
 public class IsinTwinService {
+
+    /** Cuántos listados pedirle a Yahoo. Con uno solo es con lo que la app venía fallando. */
+    private static final int CANDIDATES = 10;
 
     private final IsinTwinRepository twinRepo;
     private final OperationRepository operationRepo;
@@ -78,6 +82,25 @@ public class IsinTwinService {
         row.setResolvedSymbol(null);
         row.setHistoryFrom(null);
         return check(userId, isin, row, quoteService.openHistoric());
+    }
+
+    /**
+     * Candidatos a gemelo de un ISIN, cada uno con el histórico que publica, para poder elegir.
+     *
+     * <p>Se comprueban todos, que son unas cuantas descargas, así que va bajo demanda y nunca al
+     * pintar la lista. Los que sirven salen primero, y entre ellos el de histórico más largo, que
+     * es el que menos periodos dejará sin cubrir.
+     */
+    public List<TwinCandidate> candidates(String isin) {
+        QuoteService.Historic historic = quoteService.openHistoric();
+        return quoteService.search(isin, CANDIDATES).stream()
+                .map(hit -> new TwinCandidate(hit.symbol(), hit.name(), hit.exchange(),
+                        historic.seriesOfSymbol(hit.symbol())
+                                .map(s -> s.from().toString())
+                                .orElse(null)))
+                .sorted(Comparator.comparing(TwinCandidate::usable).reversed()
+                        .thenComparing(c -> c.historyFrom() == null ? "9999" : c.historyFrom()))
+                .toList();
     }
 
     /** El gemelo de un ISIN, si alguien se lo puso. Lo consulta QuoteService al cotizar. */
