@@ -55,6 +55,16 @@ public class TradeRepublicCsvService {
     /** Prefijo con el que se marca en las notas el id de la transacción de origen. */
     public static final String NOTE_PREFIX = "TR:";
 
+    /**
+     * Tipos oficiales del BCE. Solo se usan si alguna liquidación llegara en otra divisa, que en
+     * este fichero no pasa: Trade Republic liquida en la divisa de la cuenta.
+     */
+    private final EcbFxRateService fxRates;
+
+    public TradeRepublicCsvService(EcbFxRateService fxRates) {
+        this.fxRates = fxRates;
+    }
+
     /** Coletilla en las notas de las entregas recibidas sin contrapartida en efectivo. */
     public static final String NOTE_FREE_RECEIPT = "traspaso recibido sin coste";
 
@@ -158,6 +168,28 @@ public class TradeRepublicCsvService {
         return new TradeRepublicParseResult(operations, ignored, duplicates, pendingValuation, errors);
     }
 
+    /**
+     * Deja el importe en euros, que es la única divisa que la aplicación guarda.
+     *
+     * <p>Trade Republic liquida en la divisa de la cuenta, así que el importe ya viene en euros y
+     * lo normal es que aquí no se convierta nada: la columna {@code original_currency} solo
+     * documenta la pata extranjera de la operación, y en la práctica únicamente aparece en los
+     * dividendos, que no se importan. Aun así, si algún día la liquidación llegara en otra divisa,
+     * se convierte con el BCE a la fecha de la operación en vez de guardarla como si fueran euros,
+     * que es un error que después no se detecta.
+     *
+     * <p>El BCE solo se consulta cuando hace falta de verdad. Consultarlo siempre añadiría un modo
+     * de fallo por red a un importador que hoy no depende de ninguna.
+     */
+    private BigDecimal toEur(BigDecimal amount, String currency, LocalDate date) {
+        String iso = currency == null ? "" : currency.trim().toUpperCase();
+        if (iso.isEmpty() || "EUR".equals(iso)) return amount;
+
+        return fxRates.toEur(amount, iso, date).orElseThrow(() -> new IllegalArgumentException(
+                "el importe viene en " + iso + " y no hay tipo de cambio del BCE para el "
+                        + date + "; reintenta cuando haya conexión."));
+    }
+
     private OperationForm toForm(List<String> row, Map<String, Integer> col, String type,
                                  String txId, Map<String, String> tickerByIsin,
                                  Map<String, AeatGroup> groupByIsin) {
@@ -189,6 +221,7 @@ public class TradeRepublicCsvService {
                 throw new IllegalArgumentException(
                         "el importe resultante (" + total + ") no es mayor que 0.");
             }
+            total = toEur(total, get(row, col, "currency"), date(get(row, col, "date")));
         }
 
         OperationForm f = new OperationForm();
