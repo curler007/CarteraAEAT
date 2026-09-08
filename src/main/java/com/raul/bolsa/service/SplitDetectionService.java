@@ -57,7 +57,7 @@ public class SplitDetectionService {
     private final SplitService splitService;
     private final IsinTwinService twinService;
 
-    /** Evita repetir la consulta a Yahoo en cada refresco de la página. Clave: ISIN. */
+    /** Evita repetir la consulta a Yahoo en cada refresco de la página. Clave: userId + ':' + ISIN. */
     private final Map<String, CachedSplits> cache = new ConcurrentHashMap<>();
 
     private record YahooSplit(LocalDate date, BigDecimal ratio, String label) {}
