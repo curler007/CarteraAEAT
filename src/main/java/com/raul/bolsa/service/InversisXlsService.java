@@ -65,6 +65,7 @@ public class InversisXlsService {
     private static final int COL_NAME = 6;
     private static final int COL_QTY = 7;
     private static final int COL_CURRENCY = 8;
+    private static final int COL_PRICE = 9;
     private static final int COL_AMOUNT = 10;
     private static final int COLUMNS = 11;
 
@@ -220,7 +221,7 @@ public class InversisXlsService {
         LocalDate date = date(row.get(COL_DATE));
         String isin = required(row.get(COL_ISIN), "ISIN").toUpperCase();
         BigDecimal quantity = positive(row.get(COL_QTY), "Títulos");
-        BigDecimal amount = positive(row.get(COL_AMOUNT), "Importe neto");
+        BigDecimal amount = amount(row, quantity);
         String currency = required(row.get(COL_CURRENCY), "Divisa");
 
         BigDecimal eur = fxRates.toEur(amount, currency, date).orElseThrow(() ->
@@ -431,15 +432,40 @@ public class InversisXlsService {
      * la notación española por si el gestor cambia de criterio: con coma presente, el punto solo
      * puede ser separador de miles.
      */
+    /**
+     * Importe del movimiento en su divisa.
+     *
+     * <p>Cuando el extracto lo trae a cero pero la fila tiene títulos y precio, se reconstruye
+     * multiplicándolos. No es un movimiento vacío: es el residuo que deja un canje de clase, con
+     * una fracción de participación cuyo valor no llega al céntimo, y el extracto solo publica dos
+     * decimales. Rechazarlo obligaba a descartar el fichero entero por nueve milésimas de euro.
+     */
+    private static BigDecimal amount(List<String> row, BigDecimal quantity) {
+        BigDecimal amount = decimal(row.get(COL_AMOUNT), "Importe neto");
+        if (amount.signum() > 0) return amount;
+
+        BigDecimal derived = quantity.multiply(decimal(row.get(COL_PRICE), "Precio Neto"));
+        if (derived.signum() <= 0) {
+            throw new IllegalArgumentException("Importe neto debe ser mayor que 0.");
+        }
+        log.info("Importe a cero con {} títulos a {}: se reconstruye en {}",
+                quantity.toPlainString(), row.get(COL_PRICE).trim(), derived.toPlainString());
+        return derived;
+    }
+
     private static BigDecimal positive(String raw, String field) {
+        BigDecimal value = decimal(raw, field);
+        if (value.signum() <= 0) {
+            throw new IllegalArgumentException(field + " debe ser mayor que 0.");
+        }
+        return value;
+    }
+
+    private static BigDecimal decimal(String raw, String field) {
         String v = required(raw, field).replace(" ", "");
         if (v.indexOf(',') >= 0) v = v.replace(".", "").replace(',', '.');
         try {
-            BigDecimal value = new BigDecimal(v);
-            if (value.signum() <= 0) {
-                throw new IllegalArgumentException(field + " debe ser mayor que 0.");
-            }
-            return value;
+            return new BigDecimal(v);
         } catch (NumberFormatException e) {
             throw new IllegalArgumentException(field + ": '" + raw.trim() + "' no es un número.");
         }

@@ -37,6 +37,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -343,6 +344,31 @@ class InversisImportTest {
                 + "<th>Divisa</th><th>Precio Neto</th><th>Importe neto</th></tr>"
                 + String.join("", rows)
                 + "</table></body></html>").getBytes(StandardCharsets.ISO_8859_1);
+    }
+
+    @Test
+    @DisplayName("Un residuo de canje con importe redondeado a cero se importa por títulos × precio")
+    void reconstructsAmountRoundedToZero() {
+        // Un canje de clase deja sueltas 0,001 participaciones junto a las normales. El extracto
+        // solo publica dos decimales, así que su importe sale como 0,00 y la fila se rechazaba,
+        // tirando el fichero entero por nueve milésimas de euro.
+        CsvImportResult result = csvService.importCsv(alice, table(
+                row("2024-01-10", "SUSCRIPCION", FUND_A, "FONDO A", "100", "EUR", "100.00"),
+                row("2024-06-03", "BAJA IIC SWITCH", FUND_A, "FONDO A", "100", "EUR", "100.00"),
+                row("2024-06-03", "ALTA IIC SWITCH", FUND_B, "FONDO B", "99.999", "EUR", "100.00"),
+                row("2024-06-03", "ALTA IIC SWITCH", FUND_B, "FONDO B", "0.001", "EUR", "0.00")
+        ), ImportMode.ADD);
+
+        assertEquals(List.of(), result.errors(), "no debería fallar por nueve milésimas");
+
+        // El importador funde las filas del mismo día, fondo y tipo en una sola operación, así que
+        // el residuo se ve en el total: si la fila se hubiera descartado faltarían sus milésimas.
+        Operation entrada = single("FONDO B", OperationType.TRASPASO_IN);
+        assertEquals(0, new BigDecimal("100.000").compareTo(entrada.getQuantity()),
+                "las participaciones del residuo deben estar sumadas");
+        assertEquals(0, new BigDecimal("100.001").compareTo(entrada.getTotal()),
+                "el importe del residuo se reconstruye desde títulos por precio, no se pierde");
+        assertFalse(entrada.isUnvalued(), "la operación entra con coste conocido");
     }
 
     private static String row(String date, String type, String isin, String name,
