@@ -20,8 +20,8 @@ import java.time.LocalDate;
  */
 @Entity
 @Table(name = "isin_twins",
+       uniqueConstraints = @UniqueConstraint(name = "uk_isin_twins_user_isin", columnNames = {"user_id", "isin"}),
        indexes = @Index(name = "idx_isin_twins_user_isin", columnList = "user_id, isin"))
-@Getter
 @Setter
 public class IsinTwin {
 
