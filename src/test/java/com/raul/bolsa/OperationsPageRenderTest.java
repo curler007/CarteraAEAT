@@ -33,6 +33,8 @@ import java.util.List;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * El listado se pinta con traspasos dentro. Merece un test de verdad: una expresión mal escrita en
@@ -84,12 +86,22 @@ class OperationsPageRenderTest {
         // formulario, así que se pone a mano para poder llegar a renderizar el listado.
         CsrfToken csrf = new DefaultCsrfToken("X-CSRF-TOKEN", "_csrf", "token-de-prueba");
 
-        mvc.perform(get("/operations")
+        String html = mvc.perform(get("/operations")
                         .requestAttr(CsrfToken.class.getName(), csrf)
                         .requestAttr("_csrf", csrf))
                 .andExpect(status().isOk())
-                .andExpect(content().string(Matchers.containsString("Traspaso ↗")))
-                .andExpect(content().string(Matchers.containsString("Traspaso ↘")));
+                .andExpect(content().string(Matchers.containsString("Traspaso ↗ 03/06")))
+                .andExpect(content().string(Matchers.containsString("Traspaso ↘ 03/06")))
+                .andReturn().getResponse().getContentAsString();
+
+        // El tooltip resume el evento, que es lo que hace legible un rebalanceo de varios a varios
+        assertTrue(html.contains("Traspaso del 03/06/2024"), "falta el resumen del traspaso");
+        assertTrue(html.contains("Destino: IE0000000002"), "la salida no dice a dónde fue");
+        assertTrue(html.contains("Origen: IE0000000001"), "la entrada no dice de dónde vino");
+
+        // Las dos patas comparten identificador: es lo que resalta las filas al pulsar
+        assertEquals(4, html.split("data-transfer=\"T1\"", -1).length - 1,
+                "las dos filas y sus dos distintivos deben llevar el mismo traspaso");
     }
 
     private static OperationForm form(OperationType type, String date, String isin,

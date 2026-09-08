@@ -24,6 +24,7 @@ import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -38,6 +39,9 @@ import java.util.stream.Collectors;
 public class OperationController {
 
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("dd/MM/yyyy");
+
+    /** Fecha sin año, para etiquetas donde el espacio manda. */
+    private static final DateTimeFormatter SHORT_DATE_FMT = DateTimeFormatter.ofPattern("dd/MM");
 
     private final OperationRepository operationRepo;
     private final FifoLotRepository fifoLotRepo;
@@ -72,7 +76,8 @@ public class OperationController {
                 ));
 
         // Ventas agrupadas por año y ticker para el resumen del dashboard
-        List<SaleYearSummary> salesByYear = saleRecordRepo.findByUserId(uid).stream()
+        List<SaleRecord> allSales = saleRecordRepo.findByUserId(uid);
+        List<SaleYearSummary> salesByYear = allSales.stream()
                 .collect(Collectors.groupingBy(
                         SaleRecord::getTaxYear,
                         TreeMap::new,
@@ -127,6 +132,16 @@ public class OperationController {
         model.addAttribute("totalCost", totalCost);
         model.addAttribute("salesByYear", salesByYear);
         model.addAttribute("unvalued", unvaluedOperations(uid));
+
+        // Recorrido completo de la cartera: cuánto dinero ha entrado desde el principio y cuánto
+        // se ha ganado con él, contando también lo que ya se vendió. La parte latente la suma el
+        // navegador, que es quien tiene las cotizaciones.
+        model.addAttribute("totalInvested",
+                operationRepo.sumTotalByUserIdAndType(uid, OperationType.BUY));
+        model.addAttribute("realizedGain", allSales.stream()
+                .map(SaleRecord::getGainLoss)
+                .reduce(BigDecimal.ZERO, BigDecimal::add));
+        model.addAttribute("cashFlows", cashFlows(uid));
 
         // Punto de partida de cada periodo de la cabecera, por ISIN
         java.time.LocalDate today = java.time.LocalDate.now();
@@ -227,6 +242,9 @@ public class OperationController {
                                 .collect(Collectors.joining("<br>"))
                 ));
         model.addAttribute("sellTooltip", sellTooltip);
+
+        model.addAttribute("transferTooltip", transferTooltips(operations));
+        model.addAttribute("transferLabel", transferLabels(operations));
 
         // Lista unificada de operaciones + splits ordenada por fecha DESC
         List<HistoryRow> history = new ArrayList<>();
@@ -342,9 +360,90 @@ public class OperationController {
     }
 
     /**
+     * Las patas de cada traspaso, agrupadas por el identificador que comparten. Un rebalanceo
+     * reparte varios fondos entre varios fondos, así que ninguna pata se entiende sola.
+     */
+    private static Map<String, List<Operation>> transferEvents(List<Operation> operations) {
+        return operations.stream()
+                .filter(op -> op.getTransferId() != null)
+                .collect(Collectors.groupingBy(Operation::getTransferId));
+    }
+
+    /**
+     * Tooltip de cada pata: a dónde fue el dinero, o de dónde vino. Se resume el evento entero en
+     * vez de listar sus filas, que en un rebalanceo grande pasan de la docena.
+     */
+    private Map<Long, String> transferTooltips(List<Operation> operations) {
+        Map<Long, String> out = new HashMap<>();
+        transferEvents(operations).values().forEach(event -> {
+            LocalDate date = event.stream().map(Operation::getDate)
+                    .min(LocalDate::compareTo).orElseThrow();
+            List<String> from = tickersOf(event, OperationType.TRASPASO_OUT);
+            List<String> to = tickersOf(event, OperationType.TRASPASO_IN);
+            BigDecimal amount = event.stream()
+                    .filter(op -> op.getType() == OperationType.TRASPASO_OUT)
+                    .map(Operation::getTotal).reduce(BigDecimal.ZERO, BigDecimal::add);
+
+            String head = "Traspaso del " + DATE_FMT.format(date) + "<br>"
+                    + count(from, "fondo") + " → " + count(to, "fondo")
+                    + " · " + amount.setScale(2, RoundingMode.HALF_UP) + " €<br>";
+            for (Operation op : event) {
+                boolean outgoing = op.getType() == OperationType.TRASPASO_OUT;
+                List<String> other = outgoing ? to : from;
+                out.put(op.getId(), head + (outgoing ? "Destino: " : "Origen: ")
+                        + (other.isEmpty() ? "sin registrar" : String.join(", ", other)));
+            }
+        });
+        return out;
+    }
+
+    /** Fecha corta del evento, para distinguir de un vistazo dos traspasos distintos. */
+    private Map<Long, String> transferLabels(List<Operation> operations) {
+        Map<Long, String> out = new HashMap<>();
+        transferEvents(operations).values().forEach(event -> {
+            String label = SHORT_DATE_FMT.format(event.stream().map(Operation::getDate)
+                    .min(LocalDate::compareTo).orElseThrow());
+            event.forEach(op -> out.put(op.getId(), label));
+        });
+        return out;
+    }
+
+    private static List<String> tickersOf(List<Operation> event, OperationType type) {
+        return event.stream().filter(op -> op.getType() == type)
+                .map(Operation::getTicker).distinct().sorted().toList();
+    }
+
+    private static String count(List<String> tickers, String noun) {
+        return tickers.size() + " " + noun + (tickers.size() == 1 ? "" : "s");
+    }
+
+    /**
      * Operaciones que entraron sin coste conocido. Se avisa de ellas en el dashboard y en el
      * listado mientras sigan a cero: es un dato que falta y que falsea la ganancia al vender.
      */
+    /**
+     * Movimientos de dinero de la cartera, un apunte por día, en orden cronológico. Las compras
+     * salen en negativo y las ventas en positivo; los traspasos y los canjes no aparecen, porque
+     * no mueven dinero.
+     *
+     * <p>Se agrupan por día para no mandar al navegador cientos de apuntes del mismo día: la TIR
+     * da el mismo resultado y la página baja de tamaño.
+     */
+    private List<com.raul.bolsa.web.dto.CashFlow> cashFlows(Long userId) {
+        Map<LocalDate, BigDecimal> byDay = new TreeMap<>();
+        for (Operation op : operationRepo.findByUserId(userId)) {
+            BigDecimal amount = switch (op.getType()) {
+                case BUY -> op.getTotal().negate();
+                case SELL -> op.getTotal();
+                default -> null;
+            };
+            if (amount != null) byDay.merge(op.getDate(), amount, BigDecimal::add);
+        }
+        return byDay.entrySet().stream()
+                .map(e -> new com.raul.bolsa.web.dto.CashFlow(e.getKey().toString(), e.getValue()))
+                .toList();
+    }
+
     private List<Operation> unvaluedOperations(Long userId) {
         return operationRepo.findByUserIdAndTypeNotAndTotalLessThanEqualOrderByDateAscIdAsc(
                 userId, OperationType.CANJE, BigDecimal.ZERO);
