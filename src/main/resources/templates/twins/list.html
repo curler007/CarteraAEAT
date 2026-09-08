@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="es">
+<head th:replace="~{fragments/layout :: head('Gemelos')}"></head>
+<body>
+<nav th:replace="~{fragments/layout :: navbar}"></nav>
+
+<div class="container-fluid px-4">
+    <h4 class="mb-3"><i class="bi bi-link-45deg me-2"></i>Gemelos de cotización</h4>
+
+    <div class="alert alert-secondary small">
+        El ISIN de las operaciones no se toca: es el oficial y es el que va a la AEAT. Cuando Yahoo
+        no lo reconoce, o lo reconoce solo en un mercado que no publica histórico, se le pone aquí
+        el símbolo de <strong>otro listado del mismo fondo</strong>. Para valorar es lo mismo — los
+        cuatro listados del Vanguard LifeStrategy 60 cotizan dentro de un 0,12 % entre sí.
+    </div>
+
+    <div th:if="${pendientes > 0}" class="alert alert-warning py-2 small">
+        <i class="bi bi-exclamation-triangle-fill me-1"></i>
+        <span th:text="${pendientes}"></span>
+        <span th:text="${pendientes == 1} ? 'valor sin resolver, arriba del todo.' : 'valores sin resolver, arriba del todo.'"></span>
+        Mientras sigan así, sus variaciones por periodo caen a su coste.
+    </div>
+
+    <div th:if="${ocultos > 0}" class="small text-muted mb-2">
+        <span th:text="${ocultos}"></span>
+        <span th:text="${ocultos == 1} ? 'valor más que Yahoo resuelve solo, oculto.' : 'valores más que Yahoo resuelve solos, ocultos.'"></span>
+        <a href="/gemelos?todos=true">Ver todos</a>
+    </div>
+    <div th:if="${todos}" class="small text-muted mb-2">
+        Mostrando también los que Yahoo resuelve solos. <a href="/gemelos">Ver solo los que piden algo</a>
+    </div>
+
+    <div th:if="${success}" class="alert alert-success" th:text="${success}"></div>
+    <div th:if="${error}" class="alert alert-warning" th:text="${error}"></div>
+
+    <div class="card shadow-sm">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-dark">
+                <tr>
+                    <th></th>
+                    <th>ISIN</th>
+                    <th>Cotiza como</th>
+                    <th>Histórico desde</th>
+                    <th>Gemelo</th>
+                    <th></th>
+                </tr>
+                </thead>
+                <tbody>
+                <tr th:each="t : ${twins}">
+                    <td>
+                        <span th:style="'color:' + (${t.resolved} ? '#198754' : '#dc3545')">●</span>
+                    </td>
+                    <td><code th:text="${t.isin}"></code></td>
+                    <td>
+                        <span th:if="${t.resolvedSymbol}" th:text="${t.resolvedSymbol}"></span>
+                        <span th:unless="${t.resolvedSymbol}" class="text-muted">Yahoo no lo encuentra</span>
+                    </td>
+                    <td>
+                        <span th:if="${t.historyFrom}"
+                              th:text="${#temporals.format(t.historyFrom, 'dd/MM/yyyy')}"></span>
+                        <span th:unless="${t.historyFrom}" class="text-danger">sin histórico</span>
+                    </td>
+                    <td colspan="2">
+                        <form method="post" th:action="@{/gemelos}" class="d-flex gap-2 flex-wrap"
+                              th:attr="data-isin=${t.isin}">
+                            <input type="hidden" name="isin" th:value="${t.isin}"/>
+                            <input type="text" name="twin" class="form-control form-control-sm twin-input"
+                                   style="max-width:12rem" placeholder="p. ej. V60A.AS"
+                                   th:value="${t.twin}"/>
+                            <button type="button" class="btn btn-outline-secondary btn-sm buscar">
+                                <i class="bi bi-search me-1"></i>Buscar en Yahoo
+                            </button>
+                            <select class="form-select form-select-sm candidatos d-none"
+                                    style="max-width:26rem"></select>
+                            <button type="submit" class="btn btn-outline-primary btn-sm">Comprobar</button>
+                        </form>
+                    </td>
+                </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<div th:replace="~{fragments/layout :: scripts}"></div>
+<script>
+    // ── Buscar listados en Yahoo ──────────────────────────────────────────────
+    // Va bajo demanda y no al cargar la página: comprobar cada candidato es descargar su serie,
+    // y hacerlo para todos los ISIN de golpe sería una espera larga para nada.
+    const esFecha = iso => iso.slice(8, 10) + '/' + iso.slice(5, 7) + '/' + iso.slice(0, 4);
+
+    function etiqueta(c) {
+        const donde = [c.name, c.exchange].filter(Boolean).join(' · ');
+        const historico = c.historyFrom ? 'desde ' + esFecha(c.historyFrom) : 'SIN HISTÓRICO';
+        // El precio va delante del histórico a propósito: es lo que permite reconocer el fondo.
+        // Dos listados del mismo valor cotizan casi igual; uno que no lo sea se ve al instante.
+        const precio = c.price != null ? c.price + ' ' + (c.currency || '') : 'sin precio';
+        return c.symbol + (donde ? '  ·  ' + donde : '') + '  ·  ' + precio + '  ·  ' + historico;
+    }
+
+    document.querySelectorAll('form[data-isin]').forEach(form => {
+        const boton  = form.querySelector('.buscar');
+        const select = form.querySelector('.candidatos');
+        const input  = form.querySelector('.twin-input');
+
+        boton.addEventListener('click', async () => {
+            boton.disabled = true;
+            const original = boton.innerHTML;
+            boton.textContent = 'Buscando…';
+            try {
+                const resp = await fetch('/api/gemelos/candidatos?isin='
+                    + encodeURIComponent(form.dataset.isin));
+                const candidatos = resp.ok ? await resp.json() : [];
+                select.innerHTML = '';
+                if (candidatos.length === 0) {
+                    select.innerHTML = '<option>Yahoo no ofrece ningún listado</option>';
+                    select.disabled = true;
+                } else {
+                    // Sin selección previa: elegir por accidente al desplegar sería peor que nada
+                    select.appendChild(new Option('Elige un listado…', ''));
+                    candidatos.forEach(c => {
+                        const opcion = new Option(etiqueta(c), c.symbol);
+                        // Los que no publican serie se ofrecen igual, porque a veces son el único
+                        // sitio donde el valor cotiza, pero se avisa de lo que dejan sin cubrir
+                        if (!c.historyFrom) opcion.style.color = '#dc3545';
+                        select.appendChild(opcion);
+                    });
+                    select.disabled = false;
+                }
+                select.classList.remove('d-none');
+                boton.classList.add('d-none');
+            } catch {
+                boton.disabled = false;
+                boton.innerHTML = original;
+            }
+        });
+
+        // Elegir del desplegable solo rellena la casilla: guardar sigue siendo pulsar Comprobar,
+        // que es lo que verifica el símbolo de verdad antes de darlo por bueno.
+        select.addEventListener('change', () => {
+            if (select.value) input.value = select.value;
+        });
+    });
+</script>
+</body>
+</html>

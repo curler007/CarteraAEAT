@@ -15,6 +15,7 @@ import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 
@@ -23,7 +24,7 @@ import java.util.Optional;
 public class QuoteService {
 
     private static final String SEARCH_URL =
-            "https://query2.finance.yahoo.com/v1/finance/search?q=%s&quotesCount=1&newsCount=0";
+            "https://query2.finance.yahoo.com/v1/finance/search?q=%s&quotesCount=%d&newsCount=0";
     private static final String CHART_URL =
             "https://query1.finance.yahoo.com/v8/finance/chart/%s?%s";
     /**
@@ -37,6 +38,13 @@ public class QuoteService {
      */
     private static final String QUOTE_CHART_QUERY = "interval=1d&range=2y";
 
+    /**
+     * Query para valorar la cartera en fechas pasadas. Va aparte de la del dashboard, que se pide
+     * una vez por posición en cada carga: aquí interesa alcance y allí ligereza.
+     */
+    private static final String HISTORIC_CHART_QUERY = "interval=1d&range=10y";
+
+
     /** ISINs no estándar que Yahoo Finance no reconoce → símbolo preferido en EUR, fallback en USD */
     private static final Map<String, String[]> ISIN_SYMBOL_OVERRIDE = Map.of(
             "XF000BTC0017", new String[]{"BTC-EUR", "BTC-USD"},
@@ -46,12 +54,35 @@ public class QuoteService {
 
     private final RestTemplate rest;
     private final ObjectMapper mapper = new ObjectMapper();
+    private final EcbFxRateService fxRates;
 
-    public QuoteService() {
+    public QuoteService(EcbFxRateService fxRates) {
+        this.fxRates = fxRates;
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(5_000);
         factory.setReadTimeout(10_000);
         this.rest = new RestTemplate(factory);
+    }
+
+    /**
+     * Cotización de un ISIN, probando antes su gemelo si lo tiene.
+     *
+     * <p>La regla es tajante: si hay gemelo se consulta el gemelo y solo el gemelo. Caer de vuelta
+     * al ISIN cuando el gemelo falla sería peor que no cotizar, porque taparía un símbolo mal
+     * escrito con un precio de aspecto correcto y nadie se enteraría. Sin precio, en cambio, la
+     * fila sale con rayas y el punto del listado en rojo.
+     *
+     * <p>El gemelo llega como parámetro y no se busca aquí: quien lo guarda necesita cotizar para
+     * comprobarlo, y si este servicio fuese a leer los gemelos los dos se llamarían en círculo.
+     */
+    public Optional<QuoteResult> getQuote(String isin, String twin) {
+        if (twin == null || twin.isBlank()) return getQuote(isin);
+        try {
+            return fetchQuote(twin.trim());
+        } catch (Exception e) {
+            log.warn("No se pudo cotizar el gemelo {} de {}: {}", twin, isin, e.getMessage());
+            return Optional.empty();
+        }
     }
 
     public Optional<QuoteResult> getQuote(String isin) {
@@ -109,8 +140,43 @@ public class QuoteService {
         return s != null && s.matches("[A-Z]{2}[A-Z0-9]{10}");
     }
 
+    /**
+     * Lo que Yahoo ofrece al buscar un ISIN, con nombre y mercado para poder distinguirlos.
+     *
+     * <p>La resolución automática se queda con el primero y por eso falla tanto: en los fondos, el
+     * primero suele ser un listado secundario alemán sin histórico y el bueno viene detrás. Esto
+     * es para enseñárselos todos a quien tenga que elegir.
+     */
+    public List<SearchHit> search(String isin, int count) {
+        try {
+            String url = String.format(SEARCH_URL, isin, count);
+            String body = rest.exchange(url, HttpMethod.GET, httpEntity(), String.class).getBody();
+            if (body == null) return List.of();
+            List<SearchHit> hits = new ArrayList<>();
+            for (JsonNode q : mapper.readTree(body).path("quotes")) {
+                String symbol = q.path("symbol").asText(null);
+                if (symbol == null) continue;
+                hits.add(new SearchHit(symbol,
+                        firstNonBlank(q.path("longname").asText(null), q.path("shortname").asText(null)),
+                        firstNonBlank(q.path("exchDisp").asText(null), q.path("exchange").asText(null))));
+            }
+            return hits;
+        } catch (Exception e) {
+            log.warn("No se pudo buscar {} en Yahoo: {}", isin, e.getMessage());
+            return List.of();
+        }
+    }
+
+    /** Un resultado de la búsqueda de Yahoo, sin comprobar todavía si tiene histórico. */
+    public record SearchHit(String symbol, String name, String exchange) {}
+
+    private static String firstNonBlank(String a, String b) {
+        if (a != null && !a.isBlank()) return a;
+        return b == null || b.isBlank() ? null : b;
+    }
+
     private String resolveSymbol(String isin) throws Exception {
-        String url = String.format(SEARCH_URL, isin);
+        String url = String.format(SEARCH_URL, isin, 1);
         String body = rest.exchange(url, HttpMethod.GET, httpEntity(), String.class).getBody();
         if (body == null) return null;
         JsonNode quotes = mapper.readTree(body).path("quotes");
@@ -152,23 +218,147 @@ public class QuoteService {
                     refs.week(), refs.month(), refs.year(), "EUR", false));
         }
 
-        // Convertir a EUR via Yahoo Finance forex (ej: USDEUR=X)
-        BigDecimal eurRate = fetchForexRate(currency);
-        if (eurRate == null) {
-            // Devolvemos el precio en divisa original; el frontend mostrará solo el precio
-            log.debug("No se pudo obtener tipo de cambio {}EUR, devolviendo precio sin convertir: {} {}", currency, raw, symbol);
+        // El precio de hoy y el cierre anterior van los dos al cambio de hoy: en una sesión el
+        // euro no se mueve casi, y así la variación diaria refleja el activo sin mezclarle divisa.
+        LocalDate today = LocalDate.now();
+        BigDecimal priceEur = fxRates.toEur(BigDecimal.valueOf(raw), currency, today).orElse(null);
+        if (priceEur == null) {
+            // Sin tipo de cambio se devuelve el precio en su divisa; el frontend solo lo muestra
+            log.debug("Sin tipo de cambio {}/EUR del BCE, precio sin convertir: {} {}", currency, raw, symbol);
             return Optional.of(new QuoteResult(symbol, BigDecimal.valueOf(raw), toDecimal(prevRaw),
                     refs.week(), refs.month(), refs.year(), currency, false));
         }
+        BigDecimal prevEur = prevRaw == null ? null
+                : fxRates.toEur(BigDecimal.valueOf(prevRaw), currency, today).orElse(null);
 
-        // Ambos precios se convierten al cambio de hoy: la variación diaria refleja así el
-        // movimiento del activo, sin mezclarle el movimiento de la divisa.
-        BigDecimal priceEur = toEur(BigDecimal.valueOf(raw), eurRate);
-        BigDecimal prevEur = prevRaw == null ? null : toEur(BigDecimal.valueOf(prevRaw), eurRate);
-        log.debug("Precio convertido a EUR usando tipo de cambio {}EUR = {}: {} {} → {} EUR", currency, eurRate, raw, symbol, priceEur);
+        // Los cierres de referencia, en cambio, van cada uno al cambio de SU fecha. A un año el
+        // euro se mueve mucho, y valorar el punto de partida al cambio de hoy contaría el activo
+        // pero no lo que le pasó al dinero: un fondo que sube un 10 % en dólares con el dólar
+        // cayendo un 5 % deja bastante menos de un 10 % en el bolsillo.
         return Optional.of(new QuoteResult(symbol, priceEur, prevEur,
-                toEurOrNull(refs.week(), eurRate), toEurOrNull(refs.month(), eurRate),
-                toEurOrNull(refs.year(), eurRate), currency, true));
+                refAt(refs.week(), currency, today.minusWeeks(1)),
+                refAt(refs.month(), currency, today.minusMonths(1)),
+                refAt(refs.year(), currency, today.minusYears(1)),
+                currency, true));
+    }
+
+    /**
+     * Abre una sesión para valorar la cartera en fechas pasadas.
+     *
+     * <p>Existe para cachear: valorar tres periodos pregunta por los mismos valores tres veces, y
+     * cada consulta a Yahoo cuesta una resolución de símbolo más una serie. Con la sesión, cada
+     * valor se resuelve y se descarga una sola vez, sirva para las fechas que sirva.
+     */
+    public Historic openHistoric() {
+        return new Historic();
+    }
+
+    /** Un importe con su divisa, para poder compararlo sin confundir euros con dólares. */
+    public record Money(BigDecimal amount, String currency) {}
+
+    /** Serie histórica que Yahoo publica de un valor: bajo qué símbolo y desde cuándo. */
+    public record Series(String symbol, LocalDate from) {}
+
+    /** Ventana de consulta histórica con memoria de lo ya pedido. No es segura entre hilos. */
+    public class Historic {
+
+        private final Map<String, List<String>> symbols = new HashMap<>();
+        private final Map<String, JsonNode> charts = new HashMap<>();
+
+        /** Primer símbolo al que Yahoo resuelve el ISIN, o null si no resuelve a ninguno. */
+        public String symbolFor(String isin) {
+            List<String> found = symbols.computeIfAbsent(isin, QuoteService.this::candidateSymbols);
+            return found.isEmpty() ? null : found.get(0);
+        }
+
+        /**
+         * Serie histórica utilizable de un ISIN, si Yahoo publica alguna.
+         *
+         * <p>Se exige más de un cierre a propósito. Yahoo resuelve muchos fondos a un listado
+         * secundario de bolsa alemana que devuelve el precio de hoy y nada más: con un único punto
+         * la posición se ve bien en la tabla y en cambio no hay con qué calcular ninguna variación.
+         * Una serie de un punto no es una serie.
+         *
+         * <p>No se compara contra la fecha de compra. Que Yahoo empiece más tarde que la compra es
+         * normal en valores antiguos —Apple comprada en 2000, Telefónica en 2011— y no es un ISIN
+         * equivocado, que es lo que esto busca destapar.
+         */
+        public Optional<Series> seriesOf(String isin) {
+            return firstUsable(symbols.computeIfAbsent(isin, QuoteService.this::candidateSymbols));
+        }
+
+        /** Igual, pero sobre un símbolo dado a mano: es como se comprueba un gemelo. */
+        public Optional<Series> seriesOfSymbol(String symbol) {
+            return firstUsable(List.of(symbol));
+        }
+
+        private Optional<Series> firstUsable(List<String> candidates) {
+            for (String symbol : candidates) {
+                JsonNode result = charts.computeIfAbsent(symbol, this::chart);
+                if (result == null) continue;
+                List<LocalDate> days = tradingDays(result);
+                if (days.size() < 2) continue;
+                return Optional.of(new Series(symbol, days.get(0)));
+            }
+            return Optional.empty();
+        }
+
+        /**
+         * Pasa un importe a euros con el tipo del BCE de esa fecha. Hace falta para comparar
+         * precios de listados que cotizan en monedas distintas, que es lo normal entre listados
+         * del mismo fondo.
+         *
+         * <p>Convierte el importe en vez de devolver el tipo a propósito: el del BCE va en
+         * unidades por euro y el de Yahoo iba en euros por unidad, así que un método que
+         * devolviera "el cambio" invita a multiplicar cuando toca dividir.
+         */
+        public Optional<BigDecimal> toEurAt(BigDecimal amount, String currency, LocalDate date) {
+            return fxRates.toEur(amount, currency, date);
+        }
+
+        /**
+         * Precio actual de un símbolo, en su divisa.
+         *
+         * <p>Sale del mismo gráfico que ya se descargó para mirar el histórico, así que no cuesta
+         * ninguna llamada más. Sirve para comparar listados entre sí: dos listados del mismo fondo
+         * cotizan casi igual, y uno que no lo sea canta a la legua.
+         */
+        public Optional<Money> priceOf(String symbol) {
+            JsonNode result = charts.computeIfAbsent(symbol, this::chart);
+            if (result == null) return Optional.empty();
+            JsonNode meta = result.path("meta");
+            double raw = meta.path("regularMarketPrice").asDouble(0);
+            if (raw == 0) raw = meta.path("regularMarketPreviousClose").asDouble(0);
+            if (raw == 0) raw = meta.path("chartPreviousClose").asDouble(0);
+            if (raw == 0) return Optional.empty();
+            String currency = meta.path("currency").asText("EUR");
+            if ("GBp".equals(currency) || "GBX".equals(currency)) {
+                return Optional.of(new Money(BigDecimal.valueOf(raw / 100.0), "GBP"));
+            }
+            return Optional.of(new Money(BigDecimal.valueOf(raw), currency));
+        }
+
+        private List<LocalDate> tradingDays(JsonNode result) {
+            JsonNode stamps = result.path("timestamp");
+            JsonNode closes = result.path("indicators").path("quote").path(0).path("close");
+            List<LocalDate> days = new ArrayList<>();
+            for (int i = 0; i < stamps.size() && i < closes.size(); i++) {
+                if (closes.get(i).isNumber() && closes.get(i).asDouble() > 0) {
+                    days.add(Instant.ofEpochSecond(stamps.get(i).asLong())
+                            .atZone(ZoneOffset.UTC).toLocalDate());
+                }
+            }
+            return days;
+        }
+
+        private JsonNode chart(String symbol) {
+            try {
+                return fetchChartResult(symbol, HISTORIC_CHART_QUERY).orElse(null);
+            } catch (Exception e) {
+                log.warn("No se pudo obtener el histórico de {}: {}", symbol, e.getMessage());
+                return null;
+            }
+        }
     }
 
     /** Cierres de referencia de los periodos que muestra el dashboard, en divisa original. */
@@ -211,13 +401,6 @@ public class QuoteService {
         return last;
     }
 
-    private BigDecimal toEurOrNull(BigDecimal amount, BigDecimal eurRate) {
-        return amount == null ? null : toEur(amount, eurRate);
-    }
-
-    private BigDecimal toEur(BigDecimal amount, BigDecimal eurRate) {
-        return amount.multiply(eurRate).setScale(4, java.math.RoundingMode.HALF_UP);
-    }
 
     private BigDecimal toDecimal(Double value) {
         return value == null ? null : BigDecimal.valueOf(value);
@@ -252,20 +435,17 @@ public class QuoteService {
         return null;
     }
 
-    /** Obtiene el tipo de cambio divisa→EUR más actualizado vía Yahoo Finance (ej: USDEUR=X) */
-    private BigDecimal fetchForexRate(String fromCurrency) {
-        try {
-            JsonNode result = fetchChartResult(fromCurrency + "EUR=X", QUOTE_CHART_QUERY).orElse(null);
-            if (result == null) return null;
-            JsonNode meta = result.path("meta");
-            double rate = meta.path("regularMarketPrice").asDouble(0);
-            if (rate == 0) rate = meta.path("regularMarketPreviousClose").asDouble(0);
-            if (rate == 0) rate = meta.path("chartPreviousClose").asDouble(0);
-            return rate == 0 ? null : BigDecimal.valueOf(rate);
-        } catch (Exception e) {
-            log.warn("No se pudo obtener tipo de cambio {}EUR: {}", fromCurrency, e.getMessage());
-            return null;
-        }
+    /**
+     * Un cierre de referencia pasado a euros al cambio de su propia fecha, con el tipo del BCE,
+     * que es el mismo que se usó al convertir el coste de adquisición al importar. Con el de
+     * Yahoo, coste y valoración del mismo día salían de dos fuentes distintas.
+     *
+     * <p>Devuelve null si falta el cierre o el tipo: sin uno de los dos ese periodo no tiene punto
+     * de partida, y el dashboard ya sabe que un nulo significa "sin referencia".
+     */
+    private BigDecimal refAt(BigDecimal close, String currency, LocalDate date) {
+        if (close == null) return null;
+        return fxRates.toEur(close, currency, date).orElse(null);
     }
 
     private HttpEntity<Void> httpEntity() {
