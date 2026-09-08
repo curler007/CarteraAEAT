@@ -155,10 +155,8 @@ public class IsinTwinService {
                                 QuoteService.Money mine, QuoteService.Money reference) {
         if (mine == null || reference == null) return null;
         LocalDate today = LocalDate.now();
-        Optional<BigDecimal> mineEur = historic.fxToEurAt(mine.currency(), today)
-                .map(fx -> mine.amount().multiply(fx));
-        Optional<BigDecimal> refEur = historic.fxToEurAt(reference.currency(), today)
-                .map(fx -> reference.amount().multiply(fx));
+        Optional<BigDecimal> mineEur = historic.toEurAt(mine.amount(), mine.currency(), today);
+        Optional<BigDecimal> refEur = historic.toEurAt(reference.amount(), reference.currency(), today);
         if (mineEur.isEmpty() || refEur.isEmpty() || refEur.get().signum() == 0) return null;
         return mineEur.get().subtract(refEur.get()).abs()
                 .multiply(BigDecimal.valueOf(100))

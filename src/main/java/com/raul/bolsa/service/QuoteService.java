@@ -54,8 +54,10 @@ public class QuoteService {
 
     private final RestTemplate rest;
     private final ObjectMapper mapper = new ObjectMapper();
+    private final EcbFxRateService fxRates;
 
-    public QuoteService() {
+    public QuoteService(EcbFxRateService fxRates) {
+        this.fxRates = fxRates;
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(5_000);
         factory.setReadTimeout(10_000);
@@ -216,23 +218,28 @@ public class QuoteService {
                     refs.week(), refs.month(), refs.year(), "EUR", false));
         }
 
-        // Convertir a EUR via Yahoo Finance forex (ej: USDEUR=X)
-        BigDecimal eurRate = fetchForexRate(currency);
-        if (eurRate == null) {
-            // Devolvemos el precio en divisa original; el frontend mostrará solo el precio
-            log.debug("No se pudo obtener tipo de cambio {}EUR, devolviendo precio sin convertir: {} {}", currency, raw, symbol);
+        // El precio de hoy y el cierre anterior van los dos al cambio de hoy: en una sesión el
+        // euro no se mueve casi, y así la variación diaria refleja el activo sin mezclarle divisa.
+        LocalDate today = LocalDate.now();
+        BigDecimal priceEur = fxRates.toEur(BigDecimal.valueOf(raw), currency, today).orElse(null);
+        if (priceEur == null) {
+            // Sin tipo de cambio se devuelve el precio en su divisa; el frontend solo lo muestra
+            log.debug("Sin tipo de cambio {}/EUR del BCE, precio sin convertir: {} {}", currency, raw, symbol);
             return Optional.of(new QuoteResult(symbol, BigDecimal.valueOf(raw), toDecimal(prevRaw),
                     refs.week(), refs.month(), refs.year(), currency, false));
         }
+        BigDecimal prevEur = prevRaw == null ? null
+                : fxRates.toEur(BigDecimal.valueOf(prevRaw), currency, today).orElse(null);
 
-        // Ambos precios se convierten al cambio de hoy: la variación diaria refleja así el
-        // movimiento del activo, sin mezclarle el movimiento de la divisa.
-        BigDecimal priceEur = toEur(BigDecimal.valueOf(raw), eurRate);
-        BigDecimal prevEur = prevRaw == null ? null : toEur(BigDecimal.valueOf(prevRaw), eurRate);
-        log.debug("Precio convertido a EUR usando tipo de cambio {}EUR = {}: {} {} → {} EUR", currency, eurRate, raw, symbol, priceEur);
+        // Los cierres de referencia, en cambio, van cada uno al cambio de SU fecha. A un año el
+        // euro se mueve mucho, y valorar el punto de partida al cambio de hoy contaría el activo
+        // pero no lo que le pasó al dinero: un fondo que sube un 10 % en dólares con el dólar
+        // cayendo un 5 % deja bastante menos de un 10 % en el bolsillo.
         return Optional.of(new QuoteResult(symbol, priceEur, prevEur,
-                toEurOrNull(refs.week(), eurRate), toEurOrNull(refs.month(), eurRate),
-                toEurOrNull(refs.year(), eurRate), currency, true));
+                refAt(refs.week(), currency, today.minusWeeks(1)),
+                refAt(refs.month(), currency, today.minusMonths(1)),
+                refAt(refs.year(), currency, today.minusYears(1)),
+                currency, true));
     }
 
     /**
@@ -297,13 +304,16 @@ public class QuoteService {
         }
 
         /**
-         * Cambio de una divisa a euros. Hace falta para comparar precios de listados que cotizan
-         * en monedas distintas, que es lo normal entre listados del mismo fondo.
+         * Pasa un importe a euros con el tipo del BCE de esa fecha. Hace falta para comparar
+         * precios de listados que cotizan en monedas distintas, que es lo normal entre listados
+         * del mismo fondo.
+         *
+         * <p>Convierte el importe en vez de devolver el tipo a propósito: el del BCE va en
+         * unidades por euro y el de Yahoo iba en euros por unidad, así que un método que
+         * devolviera "el cambio" invita a multiplicar cuando toca dividir.
          */
-        public Optional<BigDecimal> fxToEurAt(String currency, LocalDate date) {
-            if ("EUR".equals(currency)) return Optional.of(BigDecimal.ONE);
-            JsonNode result = charts.computeIfAbsent(currency + "EUR=X", this::chart);
-            return Optional.ofNullable(result == null ? null : closeOn(result, date));
+        public Optional<BigDecimal> toEurAt(BigDecimal amount, String currency, LocalDate date) {
+            return fxRates.toEur(amount, currency, date);
         }
 
         /**
@@ -391,13 +401,6 @@ public class QuoteService {
         return last;
     }
 
-    private BigDecimal toEurOrNull(BigDecimal amount, BigDecimal eurRate) {
-        return amount == null ? null : toEur(amount, eurRate);
-    }
-
-    private BigDecimal toEur(BigDecimal amount, BigDecimal eurRate) {
-        return amount.multiply(eurRate).setScale(4, java.math.RoundingMode.HALF_UP);
-    }
 
     private BigDecimal toDecimal(Double value) {
         return value == null ? null : BigDecimal.valueOf(value);
@@ -432,20 +435,17 @@ public class QuoteService {
         return null;
     }
 
-    /** Obtiene el tipo de cambio divisa→EUR más actualizado vía Yahoo Finance (ej: USDEUR=X) */
-    private BigDecimal fetchForexRate(String fromCurrency) {
-        try {
-            JsonNode result = fetchChartResult(fromCurrency + "EUR=X", QUOTE_CHART_QUERY).orElse(null);
-            if (result == null) return null;
-            JsonNode meta = result.path("meta");
-            double rate = meta.path("regularMarketPrice").asDouble(0);
-            if (rate == 0) rate = meta.path("regularMarketPreviousClose").asDouble(0);
-            if (rate == 0) rate = meta.path("chartPreviousClose").asDouble(0);
-            return rate == 0 ? null : BigDecimal.valueOf(rate);
-        } catch (Exception e) {
-            log.warn("No se pudo obtener tipo de cambio {}EUR: {}", fromCurrency, e.getMessage());
-            return null;
-        }
+    /**
+     * Un cierre de referencia pasado a euros al cambio de su propia fecha, con el tipo del BCE,
+     * que es el mismo que se usó al convertir el coste de adquisición al importar. Con el de
+     * Yahoo, coste y valoración del mismo día salían de dos fuentes distintas.
+     *
+     * <p>Devuelve null si falta el cierre o el tipo: sin uno de los dos ese periodo no tiene punto
+     * de partida, y el dashboard ya sabe que un nulo significa "sin referencia".
+     */
+    private BigDecimal refAt(BigDecimal close, String currency, LocalDate date) {
+        if (close == null) return null;
+        return fxRates.toEur(close, currency, date).orElse(null);
     }
 
     private HttpEntity<Void> httpEntity() {
