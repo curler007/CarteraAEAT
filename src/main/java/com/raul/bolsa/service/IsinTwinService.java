@@ -5,11 +5,14 @@ import com.raul.bolsa.domain.Operation;
 import com.raul.bolsa.repository.IsinTwinRepository;
 import com.raul.bolsa.repository.OperationRepository;
 import com.raul.bolsa.web.dto.TwinCandidate;
+import com.raul.bolsa.web.dto.TwinCheck;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.util.Comparator;
 import java.util.List;
@@ -69,7 +72,7 @@ public class IsinTwinService {
      * si sirve. Un gemelo vacío borra el que hubiera y vuelve a dejar que resuelva Yahoo.
      */
     @Transactional
-    public IsinTwin setTwin(Long userId, String isin, String twin) {
+    public TwinCheck setTwin(Long userId, String isin, String twin) {
         IsinTwin row = twinRepo.findByUserIdAndIsin(userId, isin).orElseGet(() -> {
             IsinTwin fresh = new IsinTwin();
             fresh.setUserId(userId);
@@ -81,7 +84,32 @@ public class IsinTwinService {
         // Lo aprendido con el símbolo anterior ya no vale
         row.setResolvedSymbol(null);
         row.setHistoryFrom(null);
-        return check(userId, isin, row, quoteService.openHistoric());
+        QuoteService.Historic historic = quoteService.openHistoric();
+        IsinTwin checked = check(userId, isin, row, historic);
+        return withPrices(historic, isin, checked);
+    }
+
+    /**
+     * Añade al resultado los dos precios que permiten juzgar si el gemelo es el fondo correcto: el
+     * suyo y el del listado que el ISIN resuelve por su cuenta, que casi siempre publica precio
+     * aunque no publique serie. Si no hay con qué comparar, se dice, en vez de callarlo.
+     */
+    private TwinCheck withPrices(QuoteService.Historic historic, String isin, IsinTwin row) {
+        Optional<QuoteService.Money> mine = row.getResolvedSymbol() == null
+                ? Optional.empty()
+                : historic.priceOf(row.getResolvedSymbol());
+        String own = historic.symbolFor(isin);
+        Optional<QuoteService.Money> reference = own == null || own.equals(row.getResolvedSymbol())
+                ? Optional.empty()
+                : historic.priceOf(own);
+
+        BigDecimal drift = driftPct(historic, mine.orElse(null), reference.orElse(null));
+        return new TwinCheck(row,
+                mine.map(QuoteService.Money::amount).orElse(null),
+                mine.map(QuoteService.Money::currency).orElse(null),
+                reference.map(QuoteService.Money::amount).orElse(null),
+                reference.map(QuoteService.Money::currency).orElse(null),
+                drift);
     }
 
     /**
@@ -94,10 +122,15 @@ public class IsinTwinService {
     public List<TwinCandidate> candidates(String isin) {
         QuoteService.Historic historic = quoteService.openHistoric();
         return quoteService.search(isin, CANDIDATES).stream()
-                .map(hit -> new TwinCandidate(hit.symbol(), hit.name(), hit.exchange(),
-                        historic.seriesOfSymbol(hit.symbol())
-                                .map(s -> s.from().toString())
-                                .orElse(null)))
+                .map(hit -> {
+                    var price = historic.priceOf(hit.symbol());
+                    return new TwinCandidate(hit.symbol(), hit.name(), hit.exchange(),
+                            historic.seriesOfSymbol(hit.symbol())
+                                    .map(s -> s.from().toString())
+                                    .orElse(null),
+                            price.map(QuoteService.Money::amount).orElse(null),
+                            price.map(QuoteService.Money::currency).orElse(null));
+                })
                 .sorted(Comparator.comparing(TwinCandidate::usable).reversed()
                         .thenComparing(c -> c.historyFrom() == null ? "9999" : c.historyFrom()))
                 .toList();
@@ -108,6 +141,28 @@ public class IsinTwinService {
         return twinRepo.findByUserIdAndIsin(userId, isin)
                 .map(IsinTwin::getTwin)
                 .filter(t -> t != null && !t.isBlank());
+    }
+
+    /**
+     * Cuánto se separan dos precios, en porcentaje, pasando ambos a euros antes de restar.
+     *
+     * <p>La conversión no es un adorno: sin ella no se comparan justo los dos casos que importan.
+     * Un listado correcto del mismo fondo puede cotizar en otra divisa —el de Fidelity cotiza en
+     * dólares y el que resuelve el ISIN en euros— y un valor equivocado del todo también, con lo
+     * que ni se avisaba del error ni se confirmaba el acierto.
+     */
+    private BigDecimal driftPct(QuoteService.Historic historic,
+                                QuoteService.Money mine, QuoteService.Money reference) {
+        if (mine == null || reference == null) return null;
+        LocalDate today = LocalDate.now();
+        Optional<BigDecimal> mineEur = historic.fxToEurAt(mine.currency(), today)
+                .map(fx -> mine.amount().multiply(fx));
+        Optional<BigDecimal> refEur = historic.fxToEurAt(reference.currency(), today)
+                .map(fx -> reference.amount().multiply(fx));
+        if (mineEur.isEmpty() || refEur.isEmpty() || refEur.get().signum() == 0) return null;
+        return mineEur.get().subtract(refEur.get()).abs()
+                .multiply(BigDecimal.valueOf(100))
+                .divide(refEur.get().abs(), 2, RoundingMode.HALF_UP);
     }
 
     private IsinTwin newRow(Long userId, String isin) {

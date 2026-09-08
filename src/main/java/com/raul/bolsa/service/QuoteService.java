@@ -246,6 +246,9 @@ public class QuoteService {
         return new Historic();
     }
 
+    /** Un importe con su divisa, para poder compararlo sin confundir euros con dólares. */
+    public record Money(BigDecimal amount, String currency) {}
+
     /** Serie histórica que Yahoo publica de un valor: bajo qué símbolo y desde cuándo. */
     public record Series(String symbol, LocalDate from) {}
 
@@ -291,6 +294,38 @@ public class QuoteService {
                 return Optional.of(new Series(symbol, days.get(0)));
             }
             return Optional.empty();
+        }
+
+        /**
+         * Cambio de una divisa a euros. Hace falta para comparar precios de listados que cotizan
+         * en monedas distintas, que es lo normal entre listados del mismo fondo.
+         */
+        public Optional<BigDecimal> fxToEurAt(String currency, LocalDate date) {
+            if ("EUR".equals(currency)) return Optional.of(BigDecimal.ONE);
+            JsonNode result = charts.computeIfAbsent(currency + "EUR=X", this::chart);
+            return Optional.ofNullable(result == null ? null : closeOn(result, date));
+        }
+
+        /**
+         * Precio actual de un símbolo, en su divisa.
+         *
+         * <p>Sale del mismo gráfico que ya se descargó para mirar el histórico, así que no cuesta
+         * ninguna llamada más. Sirve para comparar listados entre sí: dos listados del mismo fondo
+         * cotizan casi igual, y uno que no lo sea canta a la legua.
+         */
+        public Optional<Money> priceOf(String symbol) {
+            JsonNode result = charts.computeIfAbsent(symbol, this::chart);
+            if (result == null) return Optional.empty();
+            JsonNode meta = result.path("meta");
+            double raw = meta.path("regularMarketPrice").asDouble(0);
+            if (raw == 0) raw = meta.path("regularMarketPreviousClose").asDouble(0);
+            if (raw == 0) raw = meta.path("chartPreviousClose").asDouble(0);
+            if (raw == 0) return Optional.empty();
+            String currency = meta.path("currency").asText("EUR");
+            if ("GBp".equals(currency) || "GBX".equals(currency)) {
+                return Optional.of(new Money(BigDecimal.valueOf(raw / 100.0), "GBP"));
+            }
+            return Optional.of(new Money(BigDecimal.valueOf(raw), currency));
         }
 
         private List<LocalDate> tradingDays(JsonNode result) {

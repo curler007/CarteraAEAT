@@ -21,6 +21,15 @@
         Mientras sigan así, sus variaciones por periodo caen a su coste.
     </div>
 
+    <div th:if="${ocultos > 0}" class="small text-muted mb-2">
+        <span th:text="${ocultos}"></span>
+        <span th:text="${ocultos == 1} ? 'valor más que Yahoo resuelve solo, oculto.' : 'valores más que Yahoo resuelve solos, ocultos.'"></span>
+        <a href="/gemelos?todos=true">Ver todos</a>
+    </div>
+    <div th:if="${todos}" class="small text-muted mb-2">
+        Mostrando también los que Yahoo resuelve solos. <a href="/gemelos">Ver solo los que piden algo</a>
+    </div>
+
     <div th:if="${success}" class="alert alert-success" th:text="${success}"></div>
     <div th:if="${error}" class="alert alert-warning" th:text="${error}"></div>
 
@@ -83,10 +92,11 @@
 
     function etiqueta(c) {
         const donde = [c.name, c.exchange].filter(Boolean).join(' · ');
-        const historico = c.historyFrom
-            ? 'desde ' + esFecha(c.historyFrom)
-            : 'SIN HISTÓRICO';
-        return c.symbol + (donde ? '  ·  ' + donde : '') + '  ·  ' + historico;
+        const historico = c.historyFrom ? 'desde ' + esFecha(c.historyFrom) : 'SIN HISTÓRICO';
+        // El precio va delante del histórico a propósito: es lo que permite reconocer el fondo.
+        // Dos listados del mismo valor cotizan casi igual; uno que no lo sea se ve al instante.
+        const precio = c.price != null ? c.price + ' ' + (c.currency || '') : 'sin precio';
+        return c.symbol + (donde ? '  ·  ' + donde : '') + '  ·  ' + precio + '  ·  ' + historico;
     }
 
     document.querySelectorAll('form[data-isin]').forEach(form => {
