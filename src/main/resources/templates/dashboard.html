@@ -135,13 +135,7 @@
                 </thead>
                 <tbody>
                 <tr th:each="item : ${portfolio}"
-                    th:attr="data-isin=${item.assetName()},data-qty=${item.totalQty()},data-cost=${item.totalCost()},data-avg=${item.avgCost()},data-pct-cost=${portfolioPercent[item.ticker()]},
-                             data-held-week=${basisWeek[item.assetName()]?.heldQty() ?: 0},
-                             data-added-week=${basisWeek[item.assetName()]?.addedCost() ?: 0},
-                             data-held-month=${basisMonth[item.assetName()]?.heldQty() ?: 0},
-                             data-added-month=${basisMonth[item.assetName()]?.addedCost() ?: 0},
-                             data-held-year=${basisYear[item.assetName()]?.heldQty() ?: 0},
-                             data-added-year=${basisYear[item.assetName()]?.addedCost() ?: 0}">
+                    th:attr="data-isin=${item.assetName()},data-qty=${item.totalQty()},data-cost=${item.totalCost()},data-avg=${item.avgCost()},data-pct-cost=${portfolioPercent[item.ticker()]}">
                     <td>
                         <strong th:text="${item.ticker()}"></strong>
                         <span class="quote-flag ms-1"></span>
@@ -306,19 +300,19 @@
     let valuedRows = 0;
     let allSettled = false;   // el aviso de lo no valorado solo tiene sentido al terminar
 
-    // Variación por periodo. `base` es el punto de partida: lo que ya se tenía valorado al precio
-    // de aquella fecha más el coste de lo comprado después, de forma que aportar dinero no cuenta
-    // como ganancia. Solo suman las posiciones cuyo precio de referencia conocemos.
-    const periods = {
-        today: { change: 0, base: 0, eur: 'today-eur', pct: 'today-pct' },
-        week:  { change: 0, base: 0, eur: 'week-eur',  pct: 'week-pct'  },
-        month: { change: 0, base: 0, eur: 'month-eur', pct: 'month-pct' },
-        year:  { change: 0, base: 0, eur: 'year-eur',  pct: 'year-pct'  }
-    };
-    Object.values(periods).forEach(p => {
-        p.eurEl = document.getElementById(p.eur);
-        p.pctEl = document.getElementById(p.pct);
-    });
+    // La variación del día se arma aquí sumando fila a fila: la cartera de ayer era la de hoy,
+    // así que basta con valorarla al cierre anterior, que ya viene con cada cotización.
+    const today = { change: 0, base: 0,
+                    eurEl: document.getElementById('today-eur'),
+                    pctEl: document.getElementById('today-pct') };
+
+    // Semana, mes y año, en cambio, necesitan saber qué había en cartera aquel día, y eso no se
+    // puede deducir de las filas de hoy: un traspaso deja el ISIN del destino con la fecha del
+    // origen, y valorarlo por su fila diría que ya se tenía ese fondo cuando el dinero estaba en
+    // otro. Lo reconstruye el servidor desde las operaciones, que sí llevan la fecha real.
+    const basisPromise = fetch('/api/period-basis')
+        .then(resp => resp.ok ? resp.json() : [])
+        .catch(() => []);
 
     // Ganancia realizada en ventas pasadas. La latente se le suma cuando llegan las cotizaciones.
     const realizedGain     = [[${realizedGain}]];
@@ -452,37 +446,54 @@
             + eur2.format(pendingCost) + ' € a coste, fuera del %';
     }
 
-    function renderPeriods() {
-        Object.values(periods).forEach(p => {
-            if (p.base <= 0) {
-                p.eurEl.textContent = '—';
-                p.pctEl.textContent = '';
-                p.eurEl.classList.add('text-muted');
-                p.eurEl.style.color = '';
-                return;
-            }
-            const c = p.change >= 0 ? GREEN : RED;
-            p.eurEl.textContent = signedEur(p.change);
-            p.eurEl.style.color = c;
-            p.eurEl.classList.remove('text-muted');
-            p.pctEl.textContent = '(' + signedPct(p.change / p.base * 100) + ')';
-            p.pctEl.style.color = c;
-        });
+    function paintPeriod(eurEl, pctEl, change, base, reason) {
+        if (!(base > 0)) {
+            eurEl.textContent = '—';
+            eurEl.classList.add('text-muted');
+            eurEl.style.color = '';
+            pctEl.textContent = reason || '';
+            pctEl.style.color = '';
+            return;
+        }
+        const c = change >= 0 ? GREEN : RED;
+        eurEl.textContent = signedEur(change);
+        eurEl.style.color = c;
+        eurEl.classList.remove('text-muted');
+        pctEl.textContent = '(' + signedPct(change / base * 100) + ')';
+        pctEl.style.color = c;
+    }
+
+    function renderToday() {
+        paintPeriod(today.eurEl, today.pctEl, today.change, today.base);
     }
 
     /**
-     * Suma esta posición a un periodo. El punto de partida son los títulos que ya se tenían,
-     * valorados al cierre de aquella fecha, más lo que costó lo comprado después. Si el valor no
-     * cotizaba entonces no hay precio de referencia y se parte de su coste completo.
+     * Pinta semana, mes y año con lo que valía la cartera aquel día.
+     *
+     * <p>base = valor de entonces + lo comprado después, que no es ganancia sino dinero nuevo.
+     * cambio = valor de hoy + lo cobrado por ventas − base, porque lo vendido sigue siendo tuyo.
+     *
+     * <p>Si falta el precio de algo que había aquel día, el periodo no se publica. El valor
+     * inicial saldría corto y la variación inflada, y un porcentaje inflado con estrellita se lee
+     * igual de bien que uno bueno.
      */
-    function addPeriod(period, refPrice, heldQty, addedCost, currentValue, positionCost) {
-        const held  = parseFloat(heldQty   || '0');
-        const added = parseFloat(addedCost || '0');
-        // Sin cierre de referencia el valor no cotizaba entonces: se parte de lo que costó
-        const base = refPrice != null ? held * refPrice + added : positionCost;
-        if (!(base > 0)) return;
-        period.base   += base;
-        period.change += currentValue - base;
+    function renderBaselines(baselines) {
+        const valorHoy = totalCost + latentTotal;
+        baselines.forEach(b => {
+            const eurEl = document.getElementById(b.period + '-eur');
+            const pctEl = document.getElementById(b.period + '-pct');
+            if (!eurEl) return;
+            if (b.missing.length > 0) {
+                paintPeriod(eurEl, pctEl, 0, 0,
+                    'falta precio de ' + b.missing.length
+                    + (b.missing.length === 1 ? ' valor' : ' valores'));
+                eurEl.title = 'Sin precio de ' + b.missing.join(', ') + ' el ' + b.at
+                    + ': el punto de partida saldría corto.';
+                return;
+            }
+            const base = b.openingValue + b.boughtAfter;
+            paintPeriod(eurEl, pctEl, valorHoy + b.soldAfter - base, base);
+        });
     }
 
     function color(cell, value) {
@@ -569,13 +580,10 @@
                 // Variación de la última sesión: la cartera de ayer era la de hoy, así que basta
                 // con valorarla al cierre anterior.
                 if (q.previousClose != null) {
-                    periods.today.base   += qty * q.previousClose;
-                    periods.today.change += currentValue - qty * q.previousClose;
+                    today.base   += qty * q.previousClose;
+                    today.change += currentValue - qty * q.previousClose;
                 }
-                addPeriod(periods.week,  q.closeWeek,  row.dataset.heldWeek,  row.dataset.addedWeek,  currentValue, totalCost);
-                addPeriod(periods.month, q.closeMonth, row.dataset.heldMonth, row.dataset.addedMonth, currentValue, totalCost);
-                addPeriod(periods.year,  q.closeYear,  row.dataset.heldYear,  row.dataset.addedYear,  currentValue, totalCost);
-                renderPeriods();
+                renderToday();
 
                 cellValue.textContent = currentValue.toFixed(2) + ' €';
                 color(cellValue, currentValue - totalCost);
@@ -600,7 +608,10 @@
         // Estado final: deja los resúmenes cerrados aunque ninguna cotización se haya resuelto
         allSettled = true;
         renderGlobal();
-        renderPeriods();
+        renderToday();
+        // Los periodos reconstruidos esperan aquí porque necesitan el valor de hoy, que no está
+        // completo hasta que han respondido todas las cotizaciones.
+        basisPromise.then(renderBaselines);
 
         let totalValue = 0;
         rowCurrentValue.forEach(v => { totalValue += v; });

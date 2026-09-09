@@ -91,8 +91,15 @@ class DashboardPageRenderTest {
         assertEquals(2, html.split("class=\"quote-flag ms-1\"", -1).length - 1,
                 "cada posición debe llevar su marca de cotización");
 
-        // El punto de partida de cada periodo viaja en la fila, no en el JavaScript
-        assertTrue(html.contains("data-held-year="), "falta la base del periodo anual");
+        // El punto de partida de los periodos ya no viaja en la fila: lo reconstruye el servidor
+        // desde las operaciones y llega por /api/period-basis. Lo que la página debe traer son los
+        // huecos donde el navegador lo pinta.
+        assertFalse(html.contains("data-held-year="),
+                "la base por fila se retiró: valoraba los traspasos a precios de otro fondo");
+        for (String periodo : new String[]{"week", "month", "year"}) {
+            assertTrue(html.contains("id=\"" + periodo + "-eur\""),
+                    "falta el hueco del periodo " + periodo);
+        }
 
         // Recorrido completo: lo invertido lo pinta Thymeleaf, lo ganado lo completa el navegador
         assertTrue(html.contains("Desde el principio"), "falta el resumen de toda la vida");
