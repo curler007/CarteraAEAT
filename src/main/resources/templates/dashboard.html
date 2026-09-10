@@ -479,10 +479,13 @@
      * inicial saldría corto y la variación inflada, y un porcentaje inflado con estrellita se lee
      * igual de bien que uno bueno.
      */
+    // "3 años +15,69 %" se lee como si fuera lo ganado en tres años, y son 54,8 %: la cifra es
+    // por año. La etiqueta lo dice entera, aunque repita la palabra, porque el malentendido vale
+    // un factor de tres y medio.
     const VENTANAS = [
-        { period: 'year',  etiqueta: '1 año'   },
-        { period: 'year3', etiqueta: '3 años'  },
-        { period: 'year5', etiqueta: '5 años'  }
+        { period: 'year',  etiqueta: 'último año'     },
+        { period: 'year3', etiqueta: 'últimos 3 años' },
+        { period: 'year5', etiqueta: 'últimos 5 años' }
     ];
 
     /**
@@ -522,11 +525,9 @@
             const b = porPeriodo.get(v.period);
             if (!b || !Array.isArray(b.missing)) return null;
             const rate = irrForWindow(b, valorHoy);
-            return v.etiqueta + ' ' + (rate == null ? '—' : signedPct(rate * 100));
+            return v.etiqueta + ': ' + (rate == null ? '—' : signedPct(rate * 100) + ' anual');
         }).filter(Boolean);
-        irrWindows.textContent = partes.length
-            ? 'TIR anualizada · ' + partes.join('  ·  ')
-            : '';
+        irrWindows.textContent = partes.length ? 'TIR · ' + partes.join('  ·  ') : '';
     }
 
     function renderBaselines(baselines) {
