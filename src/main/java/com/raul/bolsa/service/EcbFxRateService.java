@@ -3,7 +3,6 @@ package com.raul.bolsa.service;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
-import org.slf4j.LoggerFactory;
 import org.springframework.web.client.RestTemplate;
 
 import javax.net.ssl.HttpsURLConnection;
@@ -76,7 +75,7 @@ public class EcbFxRateService {
             protected void prepareConnection(HttpURLConnection connection, String httpMethod)
                     throws IOException {
                 super.prepareConnection(connection, httpMethod);
-                if (connection instanceof HttpsURLConnection https && SSL != null) {
+                if (connection instanceof HttpsURLConnection https) {
                     https.setSSLSocketFactory(SSL.getSocketFactory());
                 }
             }
@@ -108,9 +107,7 @@ public class EcbFxRateService {
             ctx.init(null, new TrustManager[]{combined(jvm, ecb)}, null);
             return ctx;
         } catch (Exception e) {
-            LoggerFactory.getLogger(EcbFxRateService.class)
-                    .warn("No se pudo preparar la confianza del BCE: {}", e.toString());
-            return null;
+            throw new IllegalStateException("No se pudo preparar la confianza del BCE", e);
         }
     }
 
@@ -135,9 +132,16 @@ public class EcbFxRateService {
 
             @Override
             public X509Certificate[] getAcceptedIssuers() {
-                return jvm.getAcceptedIssuers();
+                return concat(jvm.getAcceptedIssuers(), ecb.getAcceptedIssuers());
             }
         };
+    }
+
+    private static X509Certificate[] concat(X509Certificate[] left, X509Certificate[] right) {
+        X509Certificate[] both = new X509Certificate[left.length + right.length];
+        System.arraycopy(left, 0, both, 0, left.length);
+        System.arraycopy(right, 0, both, left.length, right.length);
+        return both;
     }
 
     private static X509Certificate loadRoot() throws Exception {
@@ -151,21 +155,44 @@ public class EcbFxRateService {
         KeyStore store = KeyStore.getInstance(KeyStore.getDefaultType());
         store.load(null, null);
         store.setCertificateEntry("ecb-root", root);
-        return firstX509(store);
+        return firstX509(store, root);
     }
 
     private static X509TrustManager defaultTrustManager() throws Exception {
-        return firstX509(null);
+        return firstX509(null, null);
     }
 
-    private static X509TrustManager firstX509(KeyStore store) throws Exception {
+    private static X509TrustManager firstX509(KeyStore store, X509Certificate root) throws Exception {
         TrustManagerFactory tmf =
                 TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
         tmf.init(store);
         for (TrustManager tm : tmf.getTrustManagers()) {
-            if (tm instanceof X509TrustManager x509) return x509;
+            if (tm instanceof X509TrustManager x509) {
+                return root == null ? x509 : withAcceptedIssuer(x509, root);
+            }
         }
         throw new IllegalStateException("sin gestor de confianza X509");
+    }
+
+    private static X509TrustManager withAcceptedIssuer(X509TrustManager delegate, X509Certificate root) {
+        return new X509TrustManager() {
+            @Override
+            public void checkClientTrusted(X509Certificate[] chain, String authType)
+                    throws CertificateException {
+                delegate.checkClientTrusted(chain, authType);
+            }
+
+            @Override
+            public void checkServerTrusted(X509Certificate[] chain, String authType)
+                    throws CertificateException {
+                delegate.checkServerTrusted(chain, authType);
+            }
+
+            @Override
+            public X509Certificate[] getAcceptedIssuers() {
+                return concat(delegate.getAcceptedIssuers(), new X509Certificate[]{root});
+            }
+        };
     }
 
     /**
