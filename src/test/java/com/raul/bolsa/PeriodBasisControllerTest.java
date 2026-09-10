@@ -27,6 +27,8 @@ import java.util.List;
 
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -67,6 +69,7 @@ class PeriodBasisControllerTest {
     @Test
     @DisplayName("El endpoint devuelve week/month/year con campos numéricos y missing")
     void returnsPeriodBaselinesJsonContract() throws Exception {
+        Long otherUserId = TestUsers.create(userRepo, "period-other").getId();
         when(valuation.baselines(eq(uid), anyMap())).thenReturn(List.of(
                 new PeriodBaseline("week", "2026-09-03",
                         new BigDecimal("1000.50"), new BigDecimal("10.00"), new BigDecimal("20.00"), List.of()),
@@ -87,5 +90,8 @@ class PeriodBasisControllerTest {
                 .andExpect(jsonPath("$[0].soldAfter").isNumber())
                 .andExpect(jsonPath("$[1].missing[0]").value("IE00AAA"))
                 .andExpect(jsonPath("$[0].at").value("2026-09-03"));
+
+        verify(valuation).baselines(eq(uid), anyMap());
+        verify(valuation, never()).baselines(eq(otherUserId), anyMap());
     }
 }

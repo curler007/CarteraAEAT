@@ -478,25 +478,26 @@
      * igual de bien que uno bueno.
      */
     function renderBaselines(baselines) {
-        if (!Array.isArray(baselines) || baselines.length === 0) {
-            ['week', 'month', 'year'].forEach(period => {
-                const eurEl = document.getElementById(period + '-eur');
-                const pctEl = document.getElementById(period + '-pct');
-                if (!eurEl || !pctEl) return;
-                paintPeriod(eurEl, pctEl, 0, 0, 'sin datos');
-            });
+        ['week', 'month', 'year'].forEach(period => {
+            const eurEl = document.getElementById(period + '-eur');
+            const pctEl = document.getElementById(period + '-pct');
+            if (!eurEl || !pctEl) return;
+            paintPeriod(eurEl, pctEl, 0, 0, 'sin datos');
+        });
+        if (!Array.isArray(baselines)) {
             return;
         }
         const valorHoy = totalCost + latentTotal;
         baselines.forEach(b => {
             const eurEl = document.getElementById(b.period + '-eur');
             const pctEl = document.getElementById(b.period + '-pct');
-            if (!eurEl) return;
-            if (b.missing.length > 0) {
+            if (!eurEl || !pctEl) return;
+            const missing = Array.isArray(b.missing) ? b.missing : [];
+            if (missing.length > 0) {
                 paintPeriod(eurEl, pctEl, 0, 0,
-                    'falta precio de ' + b.missing.length
-                    + (b.missing.length === 1 ? ' valor' : ' valores'));
-                eurEl.title = 'Sin precio de ' + b.missing.join(', ') + ' el ' + b.at
+                    'falta precio de ' + missing.length
+                    + (missing.length === 1 ? ' valor' : ' valores'));
+                eurEl.title = 'Sin precio de ' + missing.join(', ') + ' el ' + b.at
                     + ': el punto de partida saldría corto.';
                 return;
             }
