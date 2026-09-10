@@ -151,48 +151,29 @@ public class EcbFxRateService {
         }
     }
 
+    /**
+     * Confianza construida solo sobre la raíz del BCE. Su almacén contiene esa raíz y nada más, de
+     * modo que ya la expone como emisor aceptado: envolverlo para añadirla otra vez la duplicaba.
+     */
     private static X509TrustManager trustManagerFor(X509Certificate root) throws Exception {
         KeyStore store = KeyStore.getInstance(KeyStore.getDefaultType());
         store.load(null, null);
         store.setCertificateEntry("ecb-root", root);
-        return firstX509(store, root);
+        return firstX509(store);
     }
 
     private static X509TrustManager defaultTrustManager() throws Exception {
-        return firstX509(null, null);
+        return firstX509(null);
     }
 
-    private static X509TrustManager firstX509(KeyStore store, X509Certificate root) throws Exception {
+    private static X509TrustManager firstX509(KeyStore store) throws Exception {
         TrustManagerFactory tmf =
                 TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
         tmf.init(store);
         for (TrustManager tm : tmf.getTrustManagers()) {
-            if (tm instanceof X509TrustManager x509) {
-                return root == null ? x509 : withAcceptedIssuer(x509, root);
-            }
+            if (tm instanceof X509TrustManager x509) return x509;
         }
         throw new IllegalStateException("sin gestor de confianza X509");
-    }
-
-    private static X509TrustManager withAcceptedIssuer(X509TrustManager delegate, X509Certificate root) {
-        return new X509TrustManager() {
-            @Override
-            public void checkClientTrusted(X509Certificate[] chain, String authType)
-                    throws CertificateException {
-                delegate.checkClientTrusted(chain, authType);
-            }
-
-            @Override
-            public void checkServerTrusted(X509Certificate[] chain, String authType)
-                    throws CertificateException {
-                delegate.checkServerTrusted(chain, authType);
-            }
-
-            @Override
-            public X509Certificate[] getAcceptedIssuers() {
-                return concat(delegate.getAcceptedIssuers(), new X509Certificate[]{root});
-            }
-        };
     }
 
     /**
