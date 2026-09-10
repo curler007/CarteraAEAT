@@ -10,18 +10,22 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 
 @Service
 @Slf4j
 public class QuoteService {
+    private static final int MAX_DAILY_SYMBOLS = 2_000;
+    private static final int MAX_DAILY_CHARTS = 2_000;
 
     private static final String SEARCH_URL =
             "https://query2.finance.yahoo.com/v1/finance/search?q=%s&quotesCount=%d&newsCount=0";
@@ -253,17 +257,53 @@ public class QuoteService {
         return new Historic();
     }
 
+    /**
+     * Series y símbolos ya descargados hoy, compartidos por todas las consultas de la jornada.
+     *
+     * <p>Se tira la caché al cambiar de día y no se guarda en la base a propósito. Yahoo devuelve
+     * los cierres <em>ajustados por split</em> y reescribe el pasado con cada uno: el 12/11/2025
+     * Netflix cerró a unos 1.157 USD y hoy la misma fecha devuelve 115,75, dividida por el split
+     * del día 17. Un precio guardado se quedaría diez veces mal sin que nada lo notara; volviendo
+     * a pedirlo cada día, la corrección entra sola en veinticuatro horas.
+     */
+    private final Map<String, List<String>> daySymbols = lruCache(MAX_DAILY_SYMBOLS);
+    private final Map<String, JsonNode> dayCharts = lruCache(MAX_DAILY_CHARTS);
+    private LocalDate cachedOn;
+
+    private synchronized void rollOverIfNewDay() {
+        LocalDate today = LocalDate.now();
+        if (today.equals(cachedOn)) return;
+        daySymbols.clear();
+        dayCharts.clear();
+        cachedOn = today;
+    }
+
+    private static <K, V> Map<K, V> lruCache(int maxEntries) {
+        return Collections.synchronizedMap(new LinkedHashMap<>(16, 0.75f, true) {
+            @Override
+            protected boolean removeEldestEntry(Map.Entry<K, V> eldest) {
+                return size() > maxEntries;
+            }
+        });
+    }
+
     /** Un importe con su divisa, para poder compararlo sin confundir euros con dólares. */
     public record Money(BigDecimal amount, String currency) {}
 
     /** Serie histórica que Yahoo publica de un valor: bajo qué símbolo y desde cuándo. */
     public record Series(String symbol, LocalDate from) {}
 
-    /** Ventana de consulta histórica con memoria de lo ya pedido. No es segura entre hilos. */
+    /** Ventana de consulta histórica sobre la caché del día. */
     public class Historic {
 
-        private final Map<String, List<String>> symbols = new HashMap<>();
-        private final Map<String, JsonNode> charts = new HashMap<>();
+        private final Map<String, List<String>> symbols;
+        private final Map<String, JsonNode> charts;
+
+        private Historic() {
+            rollOverIfNewDay();
+            this.symbols = daySymbols;
+            this.charts = dayCharts;
+        }
 
         /** Primer símbolo al que Yahoo resuelve el ISIN, o null si no resuelve a ninguno. */
         public String symbolFor(String isin) {
@@ -336,6 +376,26 @@ public class QuoteService {
                 return Optional.of(new Money(BigDecimal.valueOf(raw / 100.0), "GBP"));
             }
             return Optional.of(new Money(BigDecimal.valueOf(raw), currency));
+        }
+
+        /**
+         * Cierre de un símbolo en una fecha, o vacío si su serie no llega hasta ahí.
+         *
+         * <p>Toma el símbolo ya resuelto y no el ISIN, para que quien valore decida antes si pasa
+         * por el gemelo. Y a diferencia de {@link QuoteService#getQuote}, aquí no vale el precio de
+         * hoy del {@code meta} como respaldo: valorar una fecha pasada con el precio de hoy no es
+         * una aproximación, es otra cosa.
+         */
+        public Optional<Money> closeAt(String symbol, LocalDate date) {
+            JsonNode result = charts.computeIfAbsent(symbol, this::chart);
+            if (result == null) return Optional.empty();
+            BigDecimal close = closeOn(result, date);
+            if (close == null) return Optional.empty();
+            String currency = result.path("meta").path("currency").asText("EUR");
+            boolean pence = "GBp".equals(currency) || "GBX".equals(currency);
+            return Optional.of(pence
+                    ? new Money(close.divide(BigDecimal.valueOf(100), 6, RoundingMode.HALF_UP), "GBP")
+                    : new Money(close, currency));
         }
 
         private List<LocalDate> tradingDays(JsonNode result) {
