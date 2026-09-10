@@ -26,6 +26,8 @@ public class PeriodBasisController {
      * históricos: dejar que el dashboard espere a Yahoo para pintarse sería cambiar un número malo
      * por una página lenta. La primera visita del día paga la descarga; el resto salen de la caché.
      *
+     * <p>Devuelve además las ventanas de tres y cinco años, que no tienen tarjeta pero sí TIR.
+     *
      * <p>El día de hoy no está aquí. Su punto de partida es el cierre anterior de cada posición,
      * que ya viene con la cotización, y en una sesión la cartera de ayer es la de hoy.
      */
@@ -36,6 +38,11 @@ public class PeriodBasisController {
         dates.put("week", today.minusWeeks(1));
         dates.put("month", today.minusMonths(1));
         dates.put("year", today.minusYears(1));
+        // Ventanas que solo alimentan la TIR: no tienen tarjeta propia, pero necesitan el mismo
+        // valor inicial reconstruido. Van aquí para compartir la ventana de consulta y no pedirle
+        // dos veces a Yahoo los mismos valores.
+        dates.put("year3", today.minusYears(3));
+        dates.put("year5", today.minusYears(5));
         return valuation.baselines(currentUser.id(), dates);
     }
 }
