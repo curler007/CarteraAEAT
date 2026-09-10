@@ -108,6 +108,9 @@ class DashboardPageRenderTest {
         assertTrue(html.contains("id=\"lifetime-gain\""), "falta el hueco de lo ganado");
         assertTrue(html.contains("id=\"lifetime-pct\""), "falta el hueco del porcentaje");
         assertTrue(html.contains("id=\"irr-flag\""), "falta la marca de TIR aproximada");
+        assertTrue(html.contains("id=\"irr-windows\""), "falta el hueco de las TIR por ventana");
+        assertTrue(html.contains("id=\"irr-windows-flag\""),
+                "las TIR por ventana necesitan su propio aviso: heredan el mismo sesgo que la global");
 
         // Los flujos de caja de la TIR viajan serializados a JSON. Si el inlining los escupiera
         // como un toString() de Java, el navegador no podría leerlos y la TIR no saldría.

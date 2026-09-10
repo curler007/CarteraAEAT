@@ -107,6 +107,9 @@
               id="irr-flag" class="ms-1" data-bs-toggle="tooltip" hidden><i
               class="bi bi-exclamation-triangle-fill text-warning"></i></span>
         <span id="lifetime-breakdown"></span>
+        <div class="mt-1"><span id="irr-windows"></span><span
+              id="irr-windows-flag" class="ms-1" data-bs-toggle="tooltip" hidden><i
+              class="bi bi-exclamation-triangle-fill text-warning"></i></span></div>
     </div>
 
     <div class="d-flex justify-content-end mb-2" th:unless="${#lists.isEmpty(portfolio)}">
@@ -321,6 +324,8 @@
     const lifetimePct      = document.getElementById('lifetime-pct');
     const irrFlag          = document.getElementById('irr-flag');
     const lifetimeBreakdown = document.getElementById('lifetime-breakdown');
+    const irrWindowsText   = document.getElementById('irr-windows');
+    const irrWindowsFlag   = document.getElementById('irr-windows-flag');
 
     const globalValue    = document.getElementById('global-value');
     const globalDelta    = document.getElementById('global-delta');
@@ -410,26 +415,41 @@
      * su coste. Eso deja la TIR corta, porque a esas posiciones se les está negando cualquier
      * ganancia, y por eso la cifra se marca en vez de callarse: sigue siendo informativa.
      */
+    /**
+     * Aviso de que las TIR salen cortas, o null si no hay motivo.
+     *
+     * <p>Afecta por igual a la global y a las de ventana: todas cierran con el valor de hoy, y lo
+     * que no cotiza entra en él por su coste, sin ganancia ninguna. El sesgo va siempre a la baja,
+     * así que la cifra real es como poco la que se ve.
+     */
+    function irrBiasNote() {
+        const pendingCost = totalCost - valuedCost;
+        if (!(allSettled && pendingCost > 0.005)) return null;
+        const n = rows.length - valuedRows;
+        return 'TIR aproximada y sesgada a la baja: ' + n
+            + (n === 1 ? ' posición sin cotización se valora' : ' posiciones sin cotización se valoran')
+            + ' a su coste (' + eur2.format(pendingCost) + ' €), sin ganancia ninguna.';
+    }
+
+    /** Enseña u oculta un triángulo de aviso con su tooltip, creándolo una sola vez. */
+    function flagIrr(flag, note) {
+        if (!flag) return;
+        flag.hidden = note == null;
+        if (note == null) return;
+        flag.setAttribute('data-bs-title', note);
+        if (!flag.dataset.armed) {
+            new bootstrap.Tooltip(flag);
+            flag.dataset.armed = '1';
+        }
+    }
+
     function renderIrr() {
         const flows = flowsWithToday(totalCost + latentTotal);
         const rate = flows && xirr(flows);
         if (rate == null) { lifetimePct.textContent = ''; irrFlag.hidden = true; return; }
 
         lifetimePct.textContent = '  ·  TIR ' + signedPct(rate * 100) + ' anual';
-
-        const pendingCost = totalCost - valuedCost;
-        irrFlag.hidden = !(allSettled && pendingCost > 0.005);
-        if (!irrFlag.hidden) {
-            const n = rows.length - valuedRows;
-            irrFlag.setAttribute('data-bs-title',
-                'TIR aproximada y sesgada a la baja: ' + n
-                + (n === 1 ? ' posición sin cotización se valora' : ' posiciones sin cotización se valoran')
-                + ' a su coste (' + eur2.format(pendingCost) + ' €), sin ganancia ninguna.');
-            if (!irrFlag.dataset.armed) {
-                new bootstrap.Tooltip(irrFlag);
-                irrFlag.dataset.armed = '1';
-            }
-        }
+        flagIrr(irrFlag, irrBiasNote());
     }
 
     /**
@@ -477,6 +497,64 @@
      * inicial saldría corto y la variación inflada, y un porcentaje inflado con estrellita se lee
      * igual de bien que uno bueno.
      */
+    // "3 años +15,69 %" se lee como si fuera lo ganado en tres años, y son 54,8 %: la cifra es
+    // por año. La etiqueta lo dice entera, aunque repita la palabra, porque el malentendido vale
+    // un factor de tres y medio.
+    const VENTANAS = [
+        { period: 'year',  etiqueta: 'último año'     },
+        { period: 'year3', etiqueta: 'últimos 3 años' },
+        { period: 'year5', etiqueta: 'últimos 5 años' }
+    ];
+
+    /**
+     * TIR de una ventana: se parte del valor que la cartera tenía aquel día, se le añaden los
+     * movimientos posteriores y se cierra con el valor de hoy.
+     *
+     * <p>El valor inicial entra como una salida de dinero, igual que una compra: para medir el
+     * periodo es como si hubieras comprado la cartera entera ese día por lo que valía.
+     */
+    function irrForWindow(baseline, valorHoy) {
+        if (baseline.missing.length > 0 || !cashFlows) return null;
+        const desde = new Date(baseline.at).getTime();
+        const flows = [];
+        if (baseline.openingValue > 0) flows.push({ date: baseline.at, amount: -baseline.openingValue });
+        cashFlows.filter(f => new Date(f.date).getTime() > desde).forEach(f => flows.push(f));
+        if (flows.length === 0) return null;
+        const start = new Date(flows[0].date).getTime();
+        const years = ms => (ms - start) / (365 * 24 * 3600 * 1000);
+        const serie = flows.map(f => ({ t: years(new Date(f.date).getTime()), a: f.amount }));
+        serie.push({ t: years(Date.now()), a: valorHoy });
+        return xirr(serie);
+    }
+
+    /**
+     * Las TIR por ventana, que es lo que deja ver si la cartera va mejor o peor que antes. La
+     * global sola no lo dice: una cartera vieja con años parada la arrastra hacia abajo para
+     * siempre, por bien que lo esté haciendo ahora.
+     */
+    function renderIrrWindows(baselines) {
+        if (!irrWindowsText) return;
+        // Sin respuesta usable la línea desaparece: es lo honesto, porque una TIR calculada sobre
+        // un valor inicial que no tenemos no es una aproximación, es un número inventado.
+        if (!Array.isArray(baselines)) {
+            irrWindowsText.textContent = '';
+            flagIrr(irrWindowsFlag, null);
+            return;
+        }
+        const valorHoy = totalCost + latentTotal;
+        const porPeriodo = new Map(baselines.map(b => [b.period, b]));
+        const partes = VENTANAS.map(v => {
+            const b = porPeriodo.get(v.period);
+            if (!b || !Array.isArray(b.missing)) return null;
+            const rate = irrForWindow(b, valorHoy);
+            return v.etiqueta + ': ' + (rate == null ? '—' : signedPct(rate * 100) + ' anual');
+        }).filter(Boolean);
+        irrWindowsText.textContent = partes.length ? 'TIR · ' + partes.join('  ·  ') : '';
+        // El mismo sesgo que la global, por el mismo motivo: todas cierran con el valor de hoy.
+        // Sin este aviso las tres salían con apariencia de exactas.
+        flagIrr(irrWindowsFlag, partes.length ? irrBiasNote() : null);
+    }
+
     function renderBaselines(baselines) {
         ['week', 'month', 'year'].forEach(period => {
             const eurEl = document.getElementById(period + '-eur');
@@ -484,6 +562,7 @@
             if (!eurEl || !pctEl) return;
             paintPeriod(eurEl, pctEl, 0, 0, 'sin datos');
         });
+        renderIrrWindows(baselines);
         if (!Array.isArray(baselines)) {
             return;
         }
@@ -491,7 +570,7 @@
         baselines.forEach(b => {
             const eurEl = document.getElementById(b.period + '-eur');
             const pctEl = document.getElementById(b.period + '-pct');
-            if (!eurEl || !pctEl) return;
+            if (!eurEl || !pctEl) return;   // year3 y year5 solo alimentan la TIR, no tienen tarjeta
             const missing = Array.isArray(b.missing) ? b.missing : [];
             if (missing.length > 0) {
                 paintPeriod(eurEl, pctEl, 0, 0,
