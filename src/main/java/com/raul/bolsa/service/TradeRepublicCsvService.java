@@ -16,6 +16,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
@@ -182,12 +183,12 @@ public class TradeRepublicCsvService {
      * de fallo por red a un importador que hoy no depende de ninguna.
      */
     private BigDecimal toEur(BigDecimal amount, String currency, LocalDate date) {
-        String iso = currency == null ? "" : currency.trim().toUpperCase();
+        String iso = currency == null ? "" : currency.trim().toUpperCase(Locale.ROOT);
         if (iso.isEmpty() || "EUR".equals(iso)) return amount;
 
         return fxRates.toEur(amount, iso, date).orElseThrow(() -> new IllegalArgumentException(
                 "el importe viene en " + iso + " y no hay tipo de cambio del BCE para el "
-                        + date + "; reintenta cuando haya conexión."));
+                        + date + "."));
     }
 
     private OperationForm toForm(List<String> row, Map<String, Integer> col, String type,

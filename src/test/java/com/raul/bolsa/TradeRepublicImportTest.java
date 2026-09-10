@@ -451,7 +451,7 @@ class TradeRepublicImportTest {
                         inv.getArgument(0, BigDecimal.class).multiply(new BigDecimal("0.86"))));
 
         CsvImportResult result = csvService.importCsv(alice, file(
-                tradeIn("USD", "2025-09-08", "BUY", "Apple", "US0378331005",
+                tradeIn("usd", "2025-09-08", "BUY", "Apple", "US0378331005",
                         "10", "100", "1000.00", "tx-usd")
         ), ImportMode.ADD);
 
@@ -459,6 +459,23 @@ class TradeRepublicImportTest {
         Operation compra = operationRepo.findByUserId(alice).get(0);
         assertEquals(0, new BigDecimal("860.00").compareTo(compra.getTotal()),
                 () -> "1000 USD a 0,86 son 860 €, y se guardaron " + compra.getTotal());
+    }
+
+    @Test
+    @DisplayName("Si falta el cambio del BCE, el error no lo atribuye solo a la conexión")
+    void reportsMissingFxRateWithoutAssumingConnectivity() {
+        given(fxRates.toEur(any(BigDecimal.class), eq("USD"), eq(LocalDate.parse("2025-09-08"))))
+                .willReturn(Optional.empty());
+
+        CsvImportResult result = csvService.importCsv(alice, file(
+                tradeIn("usd", "2025-09-08", "BUY", "Apple", "US0378331005",
+                        "10", "100", "1000.00", "tx-usd")
+        ), ImportMode.ADD);
+
+        assertFalse(result.ok(), "La importación debería fallar si no hay tipo de cambio");
+        assertTrue(result.errors().get(0).contains(
+                        "el importe viene en USD y no hay tipo de cambio del BCE para el 2025-09-08."),
+                () -> "Mensaje inesperado: " + result.errors());
     }
 
     /** Como {@link #trade}, pero liquidando en otra divisa. */
