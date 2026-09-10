@@ -311,8 +311,8 @@
     // origen, y valorarlo por su fila diría que ya se tenía ese fondo cuando el dinero estaba en
     // otro. Lo reconstruye el servidor desde las operaciones, que sí llevan la fecha real.
     const basisPromise = fetch('/api/period-basis')
-        .then(resp => resp.ok ? resp.json() : [])
-        .catch(() => []);
+        .then(resp => resp.ok ? resp.json() : null)
+        .catch(() => null);
 
     // Ganancia realizada en ventas pasadas. La latente se le suma cuando llegan las cotizaciones.
     const realizedGain     = [[${realizedGain}]];
@@ -478,6 +478,15 @@
      * igual de bien que uno bueno.
      */
     function renderBaselines(baselines) {
+        if (!Array.isArray(baselines) || baselines.length === 0) {
+            ['week', 'month', 'year'].forEach(period => {
+                const eurEl = document.getElementById(period + '-eur');
+                const pctEl = document.getElementById(period + '-pct');
+                if (!eurEl || !pctEl) return;
+                paintPeriod(eurEl, pctEl, 0, 0, 'sin datos');
+            });
+            return;
+        }
         const valorHoy = totalCost + latentTotal;
         baselines.forEach(b => {
             const eurEl = document.getElementById(b.period + '-eur');

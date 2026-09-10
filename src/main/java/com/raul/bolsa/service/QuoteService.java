@@ -15,14 +15,17 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.Optional;
 
 @Service
 @Slf4j
 public class QuoteService {
+    private static final int MAX_DAILY_SYMBOLS = 2_000;
+    private static final int MAX_DAILY_CHARTS = 2_000;
 
     private static final String SEARCH_URL =
             "https://query2.finance.yahoo.com/v1/finance/search?q=%s&quotesCount=%d&newsCount=0";
@@ -263,8 +266,8 @@ public class QuoteService {
      * del día 17. Un precio guardado se quedaría diez veces mal sin que nada lo notara; volviendo
      * a pedirlo cada día, la corrección entra sola en veinticuatro horas.
      */
-    private final Map<String, List<String>> daySymbols = new ConcurrentHashMap<>();
-    private final Map<String, JsonNode> dayCharts = new ConcurrentHashMap<>();
+    private final Map<String, List<String>> daySymbols = lruCache(MAX_DAILY_SYMBOLS);
+    private final Map<String, JsonNode> dayCharts = lruCache(MAX_DAILY_CHARTS);
     private LocalDate cachedOn;
 
     private synchronized void rollOverIfNewDay() {
@@ -273,6 +276,15 @@ public class QuoteService {
         daySymbols.clear();
         dayCharts.clear();
         cachedOn = today;
+    }
+
+    private static <K, V> Map<K, V> lruCache(int maxEntries) {
+        return Collections.synchronizedMap(new LinkedHashMap<>(16, 0.75f, true) {
+            @Override
+            protected boolean removeEldestEntry(Map.Entry<K, V> eldest) {
+                return size() > maxEntries;
+            }
+        });
     }
 
     /** Un importe con su divisa, para poder compararlo sin confundir euros con dólares. */
