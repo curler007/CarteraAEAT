@@ -3,9 +3,22 @@ package com.raul.bolsa.service;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
+import org.slf4j.LoggerFactory;
 import org.springframework.web.client.RestTemplate;
 
+import javax.net.ssl.HttpsURLConnection;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.TrustManagerFactory;
+import javax.net.ssl.X509TrustManager;
+import java.io.IOException;
+import java.io.InputStream;
 import java.math.BigDecimal;
+import java.net.HttpURLConnection;
+import java.security.KeyStore;
+import java.security.cert.CertificateException;
+import java.security.cert.CertificateFactory;
+import java.security.cert.X509Certificate;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.util.HashMap;
@@ -46,6 +59,9 @@ public class EcbFxRateService {
 
     private static final int SCALE = 6;
 
+    /** Raíz que el BCE usa y la JVM no trae. Vale hasta 2046. */
+    private static final String ROOT_CERT = "/certs/sectigo-public-server-auth-root-e46.pem";
+
     private final RestTemplate rest;
 
     /** divisa → (fecha → unidades por euro). */
@@ -55,10 +71,101 @@ public class EcbFxRateService {
     private final Map<String, LocalDate> lastAttempt = new HashMap<>();
 
     public EcbFxRateService() {
-        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory() {
+            @Override
+            protected void prepareConnection(HttpURLConnection connection, String httpMethod)
+                    throws IOException {
+                super.prepareConnection(connection, httpMethod);
+                if (connection instanceof HttpsURLConnection https && SSL != null) {
+                    https.setSSLSocketFactory(SSL.getSocketFactory());
+                }
+            }
+        };
         factory.setConnectTimeout(5_000);
         factory.setReadTimeout(30_000);
         this.rest = new RestTemplate(factory);
+    }
+
+    /**
+     * Contexto TLS que añade la raíz del BCE a las que ya trae la JVM.
+     *
+     * <p>El BCE sirve sus certificados bajo <em>Sectigo Public Server Authentication Root E46</em>,
+     * una raíz de 2021 que no está en el almacén de confianza de ningún JDK reciente —comprobado
+     * en el 17 y en el 23—, así que desde Java el handshake falla con {@code PKIX path building
+     * failed} aunque el navegador y curl abran la misma URL sin pestañear. Los tres endpoints del
+     * BCE usan la misma raíz y el antiguo SDW ya no responde, así que no hay a dónde mudarse.
+     *
+     * <p>Se añade solo para este cliente. Tocar el contexto TLS por defecto afectaría también a
+     * las llamadas a Yahoo, que no tienen por qué heredar una confianza que no necesitan.
+     */
+    private static final SSLContext SSL = buildSslContext();
+
+    private static SSLContext buildSslContext() {
+        try {
+            X509TrustManager jvm = defaultTrustManager();
+            X509TrustManager ecb = trustManagerFor(loadRoot());
+            SSLContext ctx = SSLContext.getInstance("TLS");
+            ctx.init(null, new TrustManager[]{combined(jvm, ecb)}, null);
+            return ctx;
+        } catch (Exception e) {
+            LoggerFactory.getLogger(EcbFxRateService.class)
+                    .warn("No se pudo preparar la confianza del BCE: {}", e.toString());
+            return null;
+        }
+    }
+
+    /** Acepta lo que acepte la JVM y, si no, lo que firme la raíz del BCE. */
+    private static X509TrustManager combined(X509TrustManager jvm, X509TrustManager ecb) {
+        return new X509TrustManager() {
+            @Override
+            public void checkServerTrusted(X509Certificate[] chain, String authType)
+                    throws CertificateException {
+                try {
+                    jvm.checkServerTrusted(chain, authType);
+                } catch (CertificateException notInJvm) {
+                    ecb.checkServerTrusted(chain, authType);
+                }
+            }
+
+            @Override
+            public void checkClientTrusted(X509Certificate[] chain, String authType)
+                    throws CertificateException {
+                jvm.checkClientTrusted(chain, authType);
+            }
+
+            @Override
+            public X509Certificate[] getAcceptedIssuers() {
+                return jvm.getAcceptedIssuers();
+            }
+        };
+    }
+
+    private static X509Certificate loadRoot() throws Exception {
+        try (InputStream pem = EcbFxRateService.class.getResourceAsStream(ROOT_CERT)) {
+            if (pem == null) throw new IllegalStateException("falta " + ROOT_CERT);
+            return (X509Certificate) CertificateFactory.getInstance("X.509").generateCertificate(pem);
+        }
+    }
+
+    private static X509TrustManager trustManagerFor(X509Certificate root) throws Exception {
+        KeyStore store = KeyStore.getInstance(KeyStore.getDefaultType());
+        store.load(null, null);
+        store.setCertificateEntry("ecb-root", root);
+        return firstX509(store);
+    }
+
+    private static X509TrustManager defaultTrustManager() throws Exception {
+        return firstX509(null);
+    }
+
+    private static X509TrustManager firstX509(KeyStore store) throws Exception {
+        TrustManagerFactory tmf =
+                TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+        tmf.init(store);
+        for (TrustManager tm : tmf.getTrustManagers()) {
+            if (tm instanceof X509TrustManager x509) return x509;
+        }
+        throw new IllegalStateException("sin gestor de confianza X509");
     }
 
     /**
