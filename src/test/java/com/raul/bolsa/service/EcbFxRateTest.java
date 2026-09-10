@@ -3,11 +3,17 @@ package com.raul.bolsa.service;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.X509TrustManager;
 import java.math.BigDecimal;
+import java.lang.reflect.Method;
+import java.security.cert.X509Certificate;
 import java.time.LocalDate;
+import java.util.Arrays;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -40,5 +46,48 @@ class EcbFxRateTest {
         assertTrue(EcbFxRateService.parse(null).isEmpty());
         assertTrue(EcbFxRateService.parse("").isEmpty());
         assertTrue(EcbFxRateService.parse("<html>Service unavailable</html>").isEmpty());
+    }
+
+    @Test
+    @DisplayName("La raíz del BCE va empaquetada y el contexto TLS se puede construir sin red")
+    void loadsBundledRootAndBuildsSslContext() throws Exception {
+        Method loadRoot = EcbFxRateService.class.getDeclaredMethod("loadRoot");
+        loadRoot.setAccessible(true);
+        assertNotNull(loadRoot.invoke(null));
+
+        Method buildSslContext = EcbFxRateService.class.getDeclaredMethod("buildSslContext");
+        buildSslContext.setAccessible(true);
+        SSLContext sslContext = (SSLContext) buildSslContext.invoke(null);
+        assertNotNull(sslContext);
+    }
+
+    @Test
+    @DisplayName("El trust manager combinado expone también la raíz añadida del BCE")
+    void combinedTrustManagerExposesBceIssuer() throws Exception {
+        X509Certificate root = invoke("loadRoot");
+        X509TrustManager jvm = invoke("defaultTrustManager");
+        X509TrustManager ecb = invoke("trustManagerFor", root);
+        X509TrustManager combined = invoke("combined", jvm, ecb);
+
+        assertTrue(Arrays.asList(combined.getAcceptedIssuers()).contains(root));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T> T invoke(String methodName, Object... args) throws Exception {
+        Method method = Arrays.stream(EcbFxRateService.class.getDeclaredMethods())
+                .filter(candidate -> candidate.getName().equals(methodName))
+                .filter(candidate -> candidate.getParameterCount() == args.length)
+                .filter(candidate -> accepts(candidate.getParameterTypes(), args))
+                .findFirst()
+                .orElseThrow();
+        method.setAccessible(true);
+        return (T) method.invoke(null, args);
+    }
+
+    private static boolean accepts(Class<?>[] parameterTypes, Object[] args) {
+        for (int i = 0; i < parameterTypes.length; i++) {
+            if (!parameterTypes[i].isInstance(args[i])) return false;
+        }
+        return true;
     }
 }
