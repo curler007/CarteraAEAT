@@ -9,12 +9,14 @@ import com.raul.bolsa.repository.OperationRepository;
 import com.raul.bolsa.repository.SaleRecordRepository;
 import com.raul.bolsa.repository.SplitRepository;
 import com.raul.bolsa.service.OperationCsvService;
+import com.raul.bolsa.service.EcbFxRateService;
 import com.raul.bolsa.web.dto.CsvImportResult;
 import com.raul.bolsa.web.dto.ImportMode;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -26,8 +28,12 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDate;
 import java.util.Comparator;
+import java.util.Optional;
 import java.util.List;
 
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.BDDMockito.given;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -60,6 +66,12 @@ class TradeRepublicImportTest {
     @Autowired OperationCsvService csvService;
     @Autowired AppUserRepository userRepo;
     @Autowired OperationRepository operationRepo;
+
+    /**
+     * El servicio de tipos va doblado: la conversión solo ocurre si la liquidación llega en otra
+     * divisa, y comprobarlo contra el BCE de verdad ataría el test a tener conexión.
+     */
+    @MockBean EcbFxRateService fxRates;
     @Autowired FifoLotRepository fifoLotRepo;
     @Autowired SaleRecordRepository saleRecordRepo;
     @Autowired SplitRepository splitRepo;
@@ -424,6 +436,54 @@ class TradeRepublicImportTest {
                                 String amount, String fee, String txId) {
         return q(date + "T00:00:00Z", date, "DEFAULT", category, type, assetClass, name, symbol,
                 shares, price, amount, fee, "", "EUR", "", "", "", "descripción", txId,
+                "", "", "", "");
+    }
+
+    @Test
+    @DisplayName("Una liquidación en otra divisa se guarda en euros, no se rechaza")
+    void convertsForeignSettlementToEur() {
+        // Hoy no ocurre: Trade Republic liquida en la divisa de la cuenta y todas las filas en
+        // dólares del extracto real son dividendos, que no se importan. Queda fijado por si algún
+        // día llega una, porque guardarla como si fueran euros no se detecta después.
+        // El tipo se inyecta en vez de pedirlo al BCE: un test que sale a la red no es un test.
+        given(fxRates.toEur(any(BigDecimal.class), eq("USD"), eq(LocalDate.parse("2025-09-08"))))
+                .willAnswer(inv -> Optional.of(
+                        inv.getArgument(0, BigDecimal.class).multiply(new BigDecimal("0.86"))));
+
+        CsvImportResult result = csvService.importCsv(alice, file(
+                tradeIn("usd", "2025-09-08", "BUY", "Apple", "US0378331005",
+                        "10", "100", "1000.00", "tx-usd")
+        ), ImportMode.ADD);
+
+        assertEquals(List.of(), result.errors(), result.errors().toString());
+        Operation compra = operationRepo.findByUserId(alice).get(0);
+        assertEquals(0, new BigDecimal("860.00").compareTo(compra.getTotal()),
+                () -> "1000 USD a 0,86 son 860 €, y se guardaron " + compra.getTotal());
+    }
+
+    @Test
+    @DisplayName("Si falta el cambio del BCE, el error no lo atribuye solo a la conexión")
+    void reportsMissingFxRateWithoutAssumingConnectivity() {
+        given(fxRates.toEur(any(BigDecimal.class), eq("USD"), eq(LocalDate.parse("2025-09-08"))))
+                .willReturn(Optional.empty());
+
+        CsvImportResult result = csvService.importCsv(alice, file(
+                tradeIn("usd", "2025-09-08", "BUY", "Apple", "US0378331005",
+                        "10", "100", "1000.00", "tx-usd")
+        ), ImportMode.ADD);
+
+        assertFalse(result.ok(), "La importación debería fallar si no hay tipo de cambio");
+        assertTrue(result.errors().get(0).contains(
+                        "el importe viene en USD y no hay tipo de cambio del BCE para el 2025-09-08."),
+                () -> "Mensaje inesperado: " + result.errors());
+    }
+
+    /** Como {@link #trade}, pero liquidando en otra divisa. */
+    private static String tradeIn(String currency, String date, String type, String name,
+                                  String symbol, String shares, String price, String amount,
+                                  String txId) {
+        return q(date + "T00:00:00Z", date, "DEFAULT", "TRADING", type, "STOCK", name, symbol,
+                shares, price, amount, "0", "", currency, "", "", "", "descripción", txId,
                 "", "", "", "");
     }
 
