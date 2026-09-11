@@ -429,8 +429,10 @@ public class OperationController {
                 default -> null;
             };
             if (amount != null) byDay.merge(op.getDate(), amount, BigDecimal::add);
-            BigDecimal unmatched = MissingOrigin.unmatchedValue(op);
-            if (unmatched.signum() > 0) byDay.merge(op.getDate(), unmatched.negate(), BigDecimal::add);
+            if (op.getType() == OperationType.TRASPASO_OUT) {
+                BigDecimal unmatched = MissingOrigin.unmatchedValue(op);
+                if (unmatched.signum() > 0) byDay.merge(op.getDate(), unmatched.negate(), BigDecimal::add);
+            }
         }
         return byDay.entrySet().stream()
                 .map(e -> new com.raul.bolsa.web.dto.CashFlow(e.getKey().toString(), e.getValue()))
