@@ -18,6 +18,7 @@
 <div class="container-fluid px-4">
 
     <div th:replace="~{fragments/layout :: unvaluedAlert(${unvalued})}"></div>
+    <div th:replace="~{fragments/layout :: missingOriginAlert(${missingOrigins})}"></div>
 
     <!-- Alertas flash -->
     <div th:if="${success}" class="alert alert-success alert-dismissible fade show" role="alert">
