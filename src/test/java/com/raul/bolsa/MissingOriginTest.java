@@ -151,6 +151,23 @@ class MissingOriginTest {
     }
 
     @Test
+    @DisplayName("La TIR recibe el dinero sin origen como aportación en su fecha")
+    void laTirRecibeElDineroSinOrigenComoAportacion() throws Exception {
+        CsrfToken csrf = new DefaultCsrfToken("X-CSRF-TOKEN", "_csrf", "token-de-prueba");
+
+        String html = mvc.perform(get("/dashboard")
+                        .requestAttr(CsrfToken.class.getName(), csrf)
+                        .requestAttr("_csrf", csrf))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertTrue(html.contains("\"date\":\"2025-10-13\""),
+                "la TIR necesita la fecha del traspaso sin origen");
+        assertTrue(html.contains("-1200"),
+                "la TIR debe recibir el dinero sin origen como aportación negativa");
+    }
+
+    @Test
     @DisplayName("Al registrar la compra que faltaba, el aviso y el ajuste desaparecen solos")
     void alImportarElOrigenSeCorrige() {
         operationService.save(uid, form(OperationType.BUY, "2024-06-01", "IE00000000X9", "100", "800", null));

@@ -414,8 +414,8 @@ public class OperationController {
      */
     /**
      * Movimientos de dinero de la cartera, un apunte por día, en orden cronológico. Las compras
-     * salen en negativo y las ventas en positivo; los traspasos y los canjes no aparecen, porque
-     * no mueven dinero.
+     * salen en negativo y las ventas en positivo; los traspasos y los canjes no aparecen, salvo
+     * la parte sin origen de una salida, que cuenta como dinero nuevo.
      *
      * <p>Se agrupan por día para no mandar al navegador cientos de apuntes del mismo día: la TIR
      * da el mismo resultado y la página baja de tamaño.
@@ -429,6 +429,8 @@ public class OperationController {
                 default -> null;
             };
             if (amount != null) byDay.merge(op.getDate(), amount, BigDecimal::add);
+            BigDecimal unmatched = MissingOrigin.unmatchedValue(op);
+            if (unmatched.signum() > 0) byDay.merge(op.getDate(), unmatched.negate(), BigDecimal::add);
         }
         return byDay.entrySet().stream()
                 .map(e -> new com.raul.bolsa.web.dto.CashFlow(e.getKey().toString(), e.getValue()))
