@@ -39,6 +39,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -159,6 +160,32 @@ class MissingOriginTest {
         assertTrue(html.contains("IE00000000X9"), "el aviso debe decir de qué valor se trata");
         assertTrue(html.contains("13/10/2025"), "el aviso debe decir cuándo pasó");
         assertTrue(html.contains("1.200,00 €"), "el aviso debe decir cuánto dinero hay en juego");
+        assertTrue(html.contains(OperationType.TRASPASO_OUT.getLabel()),
+                "el aviso debe decir por qué tipo de operación salió");
+    }
+
+    /**
+     * Una venta también deja títulos pendientes cuando no hay lotes que la respalden, y entonces
+     * no hay ningún fondo de destino: lo que falta es el coste de lo vendido, que se queda fuera
+     * del informe de la AEAT. El aviso es el mismo, así que no puede dar por hecho el traspaso.
+     */
+    @Test
+    @DisplayName("La venta sin origen sale en el aviso sin inventarle un destino")
+    void laVentaSinOrigenNoHablaDeDestino() throws Exception {
+        operationService.save(uid, form(OperationType.SELL, "2025-11-20", "IE00000000S7", "10", "300", null));
+
+        CsrfToken csrf = new DefaultCsrfToken("X-CSRF-TOKEN", "_csrf", "token-de-prueba");
+        String html = mvc.perform(get("/dashboard")
+                        .requestAttr(CsrfToken.class.getName(), csrf)
+                        .requestAttr("_csrf", csrf))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertTrue(html.contains("IE00000000S7"), "la venta sin lotes debería avisarse igual");
+        assertTrue(html.contains(OperationType.SELL.getLabel()),
+                "y distinguirse del traspaso, que sí crea un destino");
+        assertFalse(html.contains("el destino se dio de alta"),
+                "el aviso no puede afirmar que hubo un destino: en una venta no lo hay");
     }
 
     @Test

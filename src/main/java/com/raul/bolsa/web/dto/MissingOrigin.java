@@ -23,6 +23,10 @@ import java.time.LocalDate;
  * corta ante Hacienda— y ese dinero entra en la cartera sin ninguna compra detrás, de modo que
  * los periodos lo tomarían por ganancia si no se contase aparte.
  *
+ * <p>Una venta también puede quedarse sin casar, y entonces la secuela es otra: la parte sin lote
+ * no genera ningún registro de venta, así que no llega al informe de la AEAT. Por eso el aviso
+ * habla del coste que falta y no del destino que se dio de alta, que solo existe en el traspaso.
+ *
  * @param pendingQty títulos que salieron sin lote que los respaldara
  * @param value      lo que valían esos títulos, en euros
  */

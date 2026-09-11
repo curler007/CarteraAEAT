@@ -122,12 +122,14 @@
         </span>
     </strong>
     <p class="small mb-2">
-        Sin compra de la que heredar coste, el destino se dio de alta por el valor que entró. Ese
-        coste no es el que pagaste: al vender, la ganancia saldría corta ante Hacienda.
+        No consta la compra que los trajo, así que no hay coste de adquisición que arrastrar: ni
+        la cartera ni lo que se declare a Hacienda pueden cuadrar.
     </p>
     <ul class="mb-2 small">
         <li th:each="m : ${items}">
             <span th:text="${#temporals.format(m.date, 'dd/MM/yyyy')}"></span>
+            <span class="mx-1">·</span>
+            <span class="text-muted" th:text="${m.type.label}"></span>
             <span class="mx-1">·</span>
             <strong th:text="${m.ticker}"></strong>
             <span class="text-muted" th:text="'(' + ${m.isin} + ')'"></span>
