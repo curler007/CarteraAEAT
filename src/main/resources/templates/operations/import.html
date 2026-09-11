@@ -6,7 +6,7 @@
 
 <div class="container" style="max-width: 820px;">
 
-    <h4 class="mb-4"><i class="bi bi-upload me-2"></i>Importar operaciones desde CSV</h4>
+    <h4 class="mb-4"><i class="bi bi-upload me-2"></i>Importar operaciones</h4>
 
     <div th:if="${errors}" class="alert alert-danger">
         <strong class="d-block mb-2">
@@ -18,96 +18,90 @@
         </ul>
     </div>
 
-    <div class="alert alert-info">
-        <i class="bi bi-magic me-1"></i>
-        El formato se detecta solo: puedes subir el CSV de esta aplicación, la
-        <strong>Exportación de transacción</strong> de Trade Republic o el
-        <strong>extracto de movimientos</strong> de tu cartera de MyInvestor, sin convertir nada.
-    </div>
-
-    <!-- ═══ Trade Republic ═══ -->
-    <div class="card shadow-sm mb-4">
-        <div class="card-header bg-light fw-semibold">
-            <i class="bi bi-bank me-1"></i>Exportación de Trade Republic
-        </div>
+    <!-- ═══ Subida ═══ -->
+    <div class="card shadow-sm">
         <div class="card-body">
-            <p class="mb-2">
-                Se reconoce por sus propias columnas, así que basta con subir el fichero tal cual
-                lo descargas de la app del broker.
-            </p>
-            <ul class="mb-2 small">
-                <li>Se importan las <strong>compras y ventas de valores</strong> (acciones, fondos
-                    y cripto), con su comisión.</li>
-                <li>Se ignora todo lo que no mueve posiciones: ingresos, traspasos, dividendos,
-                    intereses y promociones. Al terminar se te dice cuántos se han dejado fuera.</li>
-                <li>El broker se rellena como <code>Trade Republic</code> y el grupo AEAT se deduce
-                    del país del ISIN, salvo que ya tengas ese valor: entonces se respeta el ticker
-                    y el grupo que ya usabas.</li>
-                <li>Cada operación guarda el identificador de la transacción de origen, de modo que
-                    <strong>puedes volver a importar el histórico completo</strong> cuantas veces
-                    quieras: lo ya cargado se omite en vez de duplicarse.</li>
-                <li>Las operaciones de este broker que ya hubieras metido a mano tampoco se
-                    duplican: se reconocen por coincidir en fecha, valor, tipo y cantidad. Usa el
-                    modo <strong>Añadir</strong> con tranquilidad, incluso la primera vez.</li>
+            <form th:action="@{/operations/import}" method="post" enctype="multipart/form-data"
+                  id="importForm">
+
+                <div class="mb-4">
+                    <label class="form-label fw-semibold" for="file">Fichero</label>
+                    <input type="file" class="form-control" id="file" name="file"
+                           accept=".csv,.xls,text/csv" required/>
+                </div>
+
+                <fieldset class="mb-4">
+                    <legend class="form-label fw-semibold">¿Qué hacemos con lo que ya tienes?</legend>
+
+                    <div class="form-check mb-2">
+                        <input class="form-check-input" type="radio" name="mode" id="modeAdd"
+                               value="ADD" checked/>
+                        <label class="form-check-label" for="modeAdd">
+                            <strong>Añadir</strong> a mis operaciones actuales
+                            <span class="d-block text-muted small">
+                                No borra nada. Lo que ya esté en tu cartera se reconoce y se omite,
+                                así que reimportar el mismo fichero es inofensivo.
+                            </span>
+                        </label>
+                    </div>
+
+                    <div class="form-check">
+                        <input class="form-check-input" type="radio" name="mode" id="modeReplace"
+                               value="REPLACE"/>
+                        <label class="form-check-label" for="modeReplace">
+                            <strong>Reemplazar todo</strong> por el contenido del fichero
+                            <span class="d-block text-danger small">
+                                Borra todas tus operaciones, lotes y ventas antes de importar.
+                                No se puede deshacer.
+                            </span>
+                        </label>
+                    </div>
+                </fieldset>
+
+                <div class="d-flex gap-2">
+                    <button type="submit" class="btn btn-success">
+                        <i class="bi bi-upload me-1"></i>Importar
+                    </button>
+                    <a href="/operations" class="btn btn-outline-secondary">Cancelar</a>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- ═══ Qué se puede subir ═══ -->
+    <div class="card shadow-sm mt-4">
+        <div class="card-header bg-light fw-semibold">
+            <i class="bi bi-info-circle me-1"></i>Qué puedes subir
+        </div>
+        <div class="card-body small">
+            <p class="mb-2">El formato se detecta solo: sube el fichero tal cual, sin convertirlo.</p>
+            <ul class="mb-3">
+                <li>Las operaciones de tus carteras de <strong>MyInvestor</strong>, desde
+                    <a href="https://www.inversis.com/index.html?cobranding=cbmyinvestor"
+                       target="_blank" rel="noopener">inversis.com</a>, el depositario que hay
+                    detrás. El extracto va <strong>por contrato</strong>: si tienes más de una
+                    cartera, descarga el de cada una. No vale el de la cuenta corriente, que no
+                    trae ni participaciones ni traspasos.</li>
+                <li>Las <strong>transacciones de Trade Republic</strong>, tal como las exporta
+                    la aplicación del broker.</li>
+                <li>La <strong>exportación de otra cartera</strong> de esta aplicación, que es el
+                    mismo fichero que genera el botón Exportar.</li>
             </ul>
-            <p class="mb-0 small text-muted">
-                Los splits no vienen en este fichero como tales; regístralos desde
-                <a href="/splits">Splits</a>, donde además se te sugieren automáticamente.
+            <p class="mb-0">
+                Cualquiera de los tres se puede reimportar las veces que haga falta: cada
+                operación va marcada, así que lo ya cargado se omite en vez de duplicarse. Si algo
+                llega cambiado se te enseña qué cambiaría y decides tú, sin que se escriba nada
+                hasta entonces.
             </p>
         </div>
     </div>
 
-    <!-- ═══ MyInvestor ═══ -->
-    <div class="card shadow-sm mb-4">
-        <div class="card-header bg-light fw-semibold">
-            <i class="bi bi-pie-chart me-1"></i>Extracto de MyInvestor (cartera automatizada)
-        </div>
-        <div class="card-body">
-            <p class="mb-2">
-                Es el fichero que descargas desde el detalle de la cartera. Se llama
-                <code>salida.xls</code> pero por dentro es una tabla HTML de Inversis, el
-                depositario que hay detrás; se sube tal cual, sin abrirlo ni convertirlo.
-            </p>
-            <p class="mb-2 small text-danger-emphasis">
-                <i class="bi bi-exclamation-triangle me-1"></i>
-                No sirve el <strong>extracto de la cuenta corriente</strong> asociada a la cartera:
-                ese solo dice cuántos euros salieron, no cuántas participaciones se compraron ni a
-                qué precio, y no registra los traspasos entre fondos.
-            </p>
-            <ul class="mb-2 small">
-                <li>Las decenas de órdenes que un rebalanceo genera del mismo fondo y el mismo día
-                    se agrupan en <strong>una sola operación</strong>, que es el movimiento que de
-                    verdad ha ocurrido.</li>
-                <li>Los <strong>traspasos</strong> y los cambios de clase se importan como tales:
-                    no tributan, pero llevan al fondo de destino el coste y la antigüedad del de
-                    origen. Solo los <strong>reembolsos</strong> llegan a la declaración.</li>
-                <li>El ticker es el <strong>nombre del fondo</strong> y el ISIN se guarda aparte,
-                    que es de donde sale la cotización. Si un fondo aparece con dos nombres a lo
-                    largo del fichero se usa el más reciente, para que no queden dos posiciones
-                    distintas del mismo fondo. El broker se rellena como <code>MyInvestor</code>.</li>
-                <li>Los fondos en divisa se pasan a euros con el <strong>tipo oficial del BCE</strong>
-                    de la fecha de la operación. Si no hay conexión para consultarlo, no se importa
-                    nada y se te dice qué movimientos faltaban por convertir.</li>
-                <li>Puedes <strong>volver a importar el histórico completo</strong> cuantas veces
-                    quieras: lo ya cargado se reconoce por fecha, fondo y tipo, y se omite.</li>
-            </ul>
-            <p class="mb-0 small text-muted">
-                El extracto no ata el reembolso de un fondo con la suscripción del otro, así que
-                las patas de un traspaso se agrupan por haberse ejecutado seguidas. Al terminar se
-                avisa de los que no cuadran: los que solo traen una de las dos patas —pasa cuando
-                el fichero empieza más tarde que tu cartera, y entonces esas participaciones se dan
-                de alta por el valor con el que entraron, que no tiene por qué ser lo que
-                costaron— y aquellos en los que lo que sale de unos fondos no coincide con lo que
-                entra en otros.
-            </p>
-        </div>
-    </div>
-
-    <!-- ═══ Formato ═══ -->
-    <div class="card shadow-sm mb-4">
-        <div class="card-header bg-light fw-semibold">
-            <i class="bi bi-info-circle me-1"></i>Formato propio de la aplicación
-        </div>
+    <!-- La especificación entera del formato propio, plegada: hace falta para editar un CSV a
+         mano, y estorba a quien solo viene a subir el extracto de su broker. -->
+    <details class="card shadow-sm mt-3">
+        <summary class="card-header bg-light fw-semibold" style="cursor:pointer;">
+            <i class="bi bi-filetype-csv me-1"></i>Formato del CSV propio, columna a columna
+        </summary>
         <div class="card-body">
             <p class="mb-2">
                 Es exactamente el mismo fichero que genera el botón <strong>Exportar</strong>:
@@ -180,6 +174,12 @@
                         <td>Texto libre.</td>
                     </tr>
                     <tr>
+                        <td><code>Uid</code></td><td>No</td>
+                        <td>Identidad de la operación, la misma que se exportó. Es lo que permite
+                            reimportar sin duplicar. <strong>Vacío significa operación nueva</strong>:
+                            si copias una fila para registrar otra igual, borra su uid.</td>
+                    </tr>
+                    <tr>
                         <td><code>Traspaso</code></td><td>Solo en traspasos</td>
                         <td>Etiqueta que empareja la salida de un fondo con la entrada en otro.
                             Todas las filas del mismo traspaso llevan el mismo valor; es lo que
@@ -204,57 +204,7 @@
                 <i class="bi bi-download me-1"></i>Descargar un ejemplo
             </a>
         </div>
-    </div>
-
-    <!-- ═══ Subida ═══ -->
-    <div class="card shadow-sm">
-        <div class="card-body">
-            <form th:action="@{/operations/import}" method="post" enctype="multipart/form-data"
-                  id="importForm">
-
-                <div class="mb-4">
-                    <label class="form-label fw-semibold" for="file">Fichero CSV</label>
-                    <input type="file" class="form-control" id="file" name="file"
-                           accept=".csv,text/csv" required/>
-                </div>
-
-                <fieldset class="mb-4">
-                    <legend class="form-label fw-semibold">¿Qué hacemos con lo que ya tienes?</legend>
-
-                    <div class="form-check mb-2">
-                        <input class="form-check-input" type="radio" name="mode" id="modeAdd"
-                               value="ADD" checked/>
-                        <label class="form-check-label" for="modeAdd">
-                            <strong>Añadir</strong> a mis operaciones actuales
-                            <span class="d-block text-muted small">
-                                No borra nada. Si importas dos veces el mismo fichero, las
-                                operaciones quedarán duplicadas.
-                            </span>
-                        </label>
-                    </div>
-
-                    <div class="form-check">
-                        <input class="form-check-input" type="radio" name="mode" id="modeReplace"
-                               value="REPLACE"/>
-                        <label class="form-check-label" for="modeReplace">
-                            <strong>Reemplazar todo</strong> por el contenido del fichero
-                            <span class="d-block text-danger small">
-                                Borra todas tus operaciones, lotes y ventas antes de importar.
-                                No se puede deshacer.
-                            </span>
-                        </label>
-                    </div>
-                </fieldset>
-
-                <div class="d-flex gap-2">
-                    <button type="submit" class="btn btn-success">
-                        <i class="bi bi-upload me-1"></i>Importar
-                    </button>
-                    <a href="/operations" class="btn btn-outline-secondary">Cancelar</a>
-                </div>
-            </form>
-        </div>
-    </div>
+    </details>
 
     <p class="text-muted small mt-3">
         Tras importar se recalcula el FIFO de todos los valores afectados, así que las ventas
