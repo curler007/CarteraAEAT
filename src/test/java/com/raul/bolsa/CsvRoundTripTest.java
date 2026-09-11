@@ -167,16 +167,53 @@ class CsvRoundTripTest {
     @DisplayName("Añadir dos veces el mismo fichero duplica, y no toca al otro usuario")
     void addModeAccumulates() {
         buildPortfolio(alice);
+        buildPortfolio(bob);
+        int propias = operationRepo.findByUserId(bob).size();
+
+        csvService.importCsv(bob, csvService.export(alice), ImportMode.ADD);
+
+        assertEquals(propias * 2, operationRepo.findByUserId(bob).size(),
+                "El modo añadir debería acumular: las de Bob más las que llegan de Alice");
+        assertEquals(7, operationRepo.findByUserId(alice).size(),
+                "La cartera de Alice no debe verse afectada por las importaciones de Bob");
+    }
+
+    /**
+     * Cada operación viaja en el CSV con su uid, que es lo que permite reconocerla al volver.
+     * Sin él, reimportar el histórico completo —lo natural cuando no recuerdas por dónde ibas—
+     * dejaba la cartera con todo por duplicado y el FIFO sin sentido.
+     */
+    @Test
+    @DisplayName("Reimportar el mismo fichero no duplica nada")
+    void reimportingTheSameFileAddsNothing() {
+        buildPortfolio(alice);
         byte[] csv = csvService.export(alice);
 
         csvService.importCsv(bob, csv, ImportMode.ADD);
         int afterFirst = operationRepo.findByUserId(bob).size();
+        CsvImportResult second = csvService.importCsv(bob, csv, ImportMode.ADD);
+
+        assertTrue(second.ok(), () -> "Reimportar lo mismo no es un error: " + second.errors());
+        assertEquals(afterFirst, operationRepo.findByUserId(bob).size(),
+                "Las operaciones ya presentes deberían reconocerse por su uid y omitirse");
+        assertEquals(afterFirst, second.duplicates(),
+                "y contarse como ya presentes para poder decírselo al usuario");
+        assertEquals(0, second.operations(), "no debería haber entrado ninguna operación nueva");
+    }
+
+    @Test
+    @DisplayName("Reimportar tampoco duplica los splits, que doblarían el ratio")
+    void reimportingDoesNotDuplicateSplits() {
+        buildPortfolio(alice);
+        byte[] csv = csvService.export(alice);
+
+        csvService.importCsv(bob, csv, ImportMode.ADD);
+        long afterFirst = splitRepo.findByUserId(bob).size();
         csvService.importCsv(bob, csv, ImportMode.ADD);
 
-        assertEquals(afterFirst * 2, operationRepo.findByUserId(bob).size(),
-                "El modo añadir debería acumular");
-        assertEquals(7, operationRepo.findByUserId(alice).size(),
-                "La cartera de Alice no debe verse afectada por las importaciones de Bob");
+        assertTrue(afterFirst > 0, "el escenario necesita al menos un split para probar algo");
+        assertEquals(afterFirst, splitRepo.findByUserId(bob).size(),
+                "Un split repetido no es otro split: multiplicaría los títulos por el ratio otra vez");
     }
 
     @Test

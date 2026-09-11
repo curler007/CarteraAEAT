@@ -115,7 +115,7 @@
 
     <div class="d-flex justify-content-end mb-2" th:unless="${#lists.isEmpty(portfolio)}">
         <button type="button" id="toggleOptionalCols" class="btn btn-outline-secondary btn-sm">
-            <i class="bi bi-eye me-1"></i>Mostrar precios
+            <i class="bi bi-eye me-1"></i>Mostrar detalles
         </button>
     </div>
 
@@ -129,7 +129,7 @@
                     <th class="text-end" data-sort="num">Cantidad <span class="sort-icon text-secondary ms-1">⇅</span></th>
                     <th class="text-end" data-sort="num">Coste total (€) <span class="sort-icon text-secondary ms-1">⇅</span></th>
                     <th class="text-end" data-sort="num">Valor (€) <span class="sort-icon text-secondary ms-1">⇅</span></th>
-                    <th class="text-end" data-sort="num">% cartera <span class="sort-icon text-secondary ms-1">⇅</span></th>
+                    <th class="text-end col-optional d-none" data-sort="num">% cartera <span class="sort-icon text-secondary ms-1">⇅</span></th>
                     <th class="text-end" data-sort="num">% cartera actual <span class="sort-icon text-secondary ms-1">⇅</span></th>
                     <th class="text-end col-optional d-none" data-sort="num">Precio medio (€) <span class="sort-icon text-secondary ms-1">⇅</span></th>
                     <th class="text-end col-optional d-none" data-sort="num">Precio actual (€) <span class="sort-icon text-secondary ms-1">⇅</span></th>
@@ -139,7 +139,7 @@
                 </thead>
                 <tbody>
                 <tr th:each="item : ${portfolio}"
-                    th:attr="data-isin=${item.assetName()},data-qty=${item.totalQty()},data-cost=${item.totalCost()},data-avg=${item.avgCost()},data-pct-cost=${portfolioPercent[item.ticker()]}">
+                    th:attr="data-isin=${item.assetName()},data-qty=${item.totalQty()},data-cost=${item.totalCost()},data-avg=${item.avgCost()}">
                     <td>
                         <strong th:text="${item.ticker()}"></strong>
                         <span class="quote-flag ms-1"></span>
@@ -148,7 +148,7 @@
                     <td class="text-end" th:text="${#numbers.formatDecimal(item.totalQty(), 1, 4)}"></td>
                     <td class="text-end" th:text="${#numbers.formatDecimal(item.totalCost(), 1, 2)}"></td>
                     <td class="text-end text-muted small cell-value">…</td>
-                    <td class="text-end" th:text="${#numbers.formatDecimal(portfolioPercent[item.ticker()], 1, 2) + ' %'}"></td>
+                    <td class="text-end col-optional d-none" th:text="${#numbers.formatDecimal(portfolioPercent[item.ticker()], 1, 2) + ' %'}"></td>
                     <td class="text-end text-muted small cell-pct-value">…</td>
                     <td class="text-end col-optional d-none" th:text="${#numbers.formatDecimal(item.avgCost(), 1, 2)}"></td>
                     <td class="text-end text-muted small cell-price col-optional d-none">…</td>
@@ -240,8 +240,8 @@
             const hidden = cols.length && cols[0].classList.contains('d-none');
             cols.forEach(c => c.classList.toggle('d-none', !hidden));
             btn.innerHTML = hidden
-                ? '<i class="bi bi-eye-slash me-1"></i>Ocultar precios'
-                : '<i class="bi bi-eye me-1"></i>Mostrar precios';
+                ? '<i class="bi bi-eye-slash me-1"></i>Ocultar detalles'
+                : '<i class="bi bi-eye me-1"></i>Mostrar detalles';
         });
     })();
 
@@ -291,6 +291,10 @@
 
     // ── Cotizaciones y beneficio latente ──────────────────────────────────────
     const GREEN = '#198754', RED = '#dc3545', MUTED = '#6c757d';
+
+    // El peso de una posición en la cartera no tiene signo bueno ni malo: que pese más o menos
+    // que cuando se compró no es ganancia ni pérdida, así que va en gris y no en el semáforo.
+    const DARK = '#343a40';
 
     const rows = document.querySelectorAll('tr[data-isin]');
     const totalCost = [[${totalCost}]];
@@ -707,12 +711,12 @@
         rowCurrentValue.forEach(v => { totalValue += v; });
         if (totalValue <= 0) return;
         rowCurrentValue.forEach((value, row) => {
-            const cell    = row.querySelector('.cell-pct-value');
-            const pct     = value / totalValue * 100;
-            const pctCost = parseFloat(row.dataset.pctCost);
+            const cell = row.querySelector('.cell-pct-value');
+            const pct  = value / totalValue * 100;
             cell.textContent = pct.toFixed(2) + ' %';
-            cell.classList.remove('small');
-            color(cell, pct - pctCost);
+            cell.classList.remove('small', 'text-muted');
+            cell.style.color      = DARK;
+            cell.style.fontWeight = '600';
 
             treemapData.push({
                 name:  row.querySelector('td strong').textContent,

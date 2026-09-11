@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="es">
+<head th:replace="~{fragments/layout :: head('Confirmar importación')}"></head>
+<body>
+<nav th:replace="~{fragments/layout :: navbar}"></nav>
+
+<div class="container" style="max-width: 900px;">
+
+    <h4 class="mb-3"><i class="bi bi-exclamation-diamond me-2"></i>Hay operaciones que ya tenías, con otros datos</h4>
+
+    <div class="alert alert-warning">
+        <strong class="d-block mb-1">
+            <span th:text="${#lists.size(conflicts) == 1
+                            ? 'Una operación del fichero'
+                            : #lists.size(conflicts) + ' operaciones del fichero'}">…</span>
+            ya está en tu cartera con el mismo identificador, pero con algún dato distinto.
+        </strong>
+        <span class="small">
+            Todavía no se ha importado nada. Las que venían idénticas se omiten solas y no salen
+            aquí; para estas hace falta que decidas, porque tanto puede ser una corrección que has
+            hecho en la hoja de cálculo como un fichero antiguo que desharía cambios recientes.
+        </span>
+    </div>
+
+    <form th:action="@{/operations/import/resolver}" method="post" id="conflictForm">
+
+        <div class="d-flex gap-2 align-items-center mb-3">
+            <span class="small text-muted me-auto">Marcar todas:</span>
+            <button type="button" class="btn btn-outline-secondary btn-sm" data-all="keep">
+                Dejarlas como están
+            </button>
+            <button type="button" class="btn btn-outline-secondary btn-sm" data-all="update">
+                Actualizar con el fichero
+            </button>
+        </div>
+
+        <div class="card shadow-sm mb-3" th:each="c : ${conflicts}">
+            <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <span>
+                    <strong th:text="${c.ticker}">TICKER</strong>
+                    <span class="text-muted small" th:text="'(' + ${c.isin} + ')'">(ISIN)</span>
+                    <span class="text-muted small mx-1">·</span>
+                    <span class="text-muted small"
+                          th:text="${#temporals.format(c.date, 'dd/MM/yyyy')}">fecha</span>
+                </span>
+                <div class="btn-group btn-group-sm" role="group">
+                    <input type="radio" class="btn-check" autocomplete="off"
+                           th:id="'keep-' + ${c.uid}" th:name="'decision-' + ${c.uid}" checked/>
+                    <label class="btn btn-outline-secondary" th:for="'keep-' + ${c.uid}">
+                        Dejarla como está
+                    </label>
+
+                    <input type="radio" class="btn-check js-update" autocomplete="off"
+                           th:id="'update-' + ${c.uid}" th:name="'decision-' + ${c.uid}"
+                           th:attr="data-uid=${c.uid}"/>
+                    <label class="btn btn-outline-danger" th:for="'update-' + ${c.uid}">
+                        Actualizar
+                    </label>
+                </div>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-sm align-middle mb-0">
+                    <thead class="table-light">
+                    <tr>
+                        <th style="width: 20%;">Campo</th>
+                        <th style="width: 40%;">Lo que tienes ahora</th>
+                        <th style="width: 40%;">Lo que trae el fichero</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <tr th:each="d : ${c.differences}">
+                        <td class="text-muted" th:text="${d.field}">Campo</td>
+                        <td th:text="${d.current} ?: '—'">actual</td>
+                        <td class="fw-semibold" th:text="${d.incoming} ?: '—'">nuevo</td>
+                    </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!--
+          Una entrada por operación a actualizar, que es lo único que el servidor necesita saber:
+          lo que no llegue se queda como está. Los radios de arriba son de interfaz y no se envían;
+          estas las mantiene sincronizadas el script de abajo.
+        -->
+        <div id="decisions" hidden></div>
+
+        <div class="d-flex gap-2">
+            <button type="submit" class="btn btn-success">
+                <i class="bi bi-check-lg me-1"></i>Aplicar y terminar la importación
+            </button>
+            <a href="/operations" class="btn btn-outline-secondary">Cancelar la importación</a>
+        </div>
+    </form>
+</div>
+
+<div th:replace="~{fragments/layout :: scripts}"></div>
+<script>
+    (function () {
+        const form      = document.getElementById('conflictForm');
+        const decisions = document.getElementById('decisions');
+
+        // El formulario viaja con un input "update" por cada operación marcada para sobrescribir.
+        // Se reconstruyen enteros en cada cambio: son unas pocas y así no hay estado que mantener.
+        function sync() {
+            decisions.innerHTML = '';
+            form.querySelectorAll('.js-update:checked').forEach(radio => {
+                const input = document.createElement('input');
+                input.type  = 'hidden';
+                input.name  = 'update';
+                input.value = radio.dataset.uid;
+                decisions.appendChild(input);
+            });
+        }
+
+        form.addEventListener('change', sync);
+
+        form.querySelectorAll('button[data-all]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const actualizar = btn.dataset.all === 'update';
+                form.querySelectorAll('.js-update').forEach(radio => {
+                    const grupo = form.querySelectorAll('input[name="' + radio.name + '"]');
+                    grupo[actualizar ? 1 : 0].checked = true;
+                });
+                sync();
+            });
+        });
+
+        // Sobrescribir pisa datos que ya estaban guardados: que cueste un clic de confirmación.
+        form.addEventListener('submit', function (e) {
+            const n = form.querySelectorAll('.js-update:checked').length;
+            if (n === 0) return;
+            const msg = 'Vas a sustituir ' + n + (n === 1 ? ' operación' : ' operaciones')
+                      + ' por los datos del fichero.\n\nEsto no se puede deshacer. ¿Continuar?';
+            if (!confirm(msg)) e.preventDefault();
+        });
+
+        sync();
+    })();
+</script>
+</body>
+</html>

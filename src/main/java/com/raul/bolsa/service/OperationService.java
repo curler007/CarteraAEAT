@@ -200,6 +200,9 @@ public class OperationService {
         op.setAeatGroup(form.getAeatGroup());
         op.setNotes(form.getNotes());
         op.setTransferId(form.getTransferId());
+        // Vacío en un alta normal: lo rellena Operation.assignUid() al insertar. Viene relleno
+        // al editar y al importar, y entonces se conserva, que es lo que hace estable la identidad.
+        op.setUid(form.getUid());
 
         if (form.getType() == OperationType.CANJE) {
             op.setTotal(BigDecimal.ZERO);
