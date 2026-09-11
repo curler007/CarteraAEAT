@@ -46,6 +46,6 @@ public record MissingOrigin(Long operationId, LocalDate date, OperationType type
         if (pending == null || pending.signum() <= 0) return BigDecimal.ZERO;
         BigDecimal qty = op.getQuantity();
         if (qty == null || qty.signum() == 0) return BigDecimal.ZERO;
-        return op.getTotal().multiply(pending).divide(qty, 6, RoundingMode.HALF_UP);
+        return op.getTotal().multiply(pending).divide(qty.abs(), 6, RoundingMode.HALF_UP);
     }
 }

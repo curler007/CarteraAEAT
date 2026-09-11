@@ -123,6 +123,17 @@ class MissingOriginTest {
     }
 
     @Test
+    @DisplayName("El valor sin origen sale en positivo aunque la salida guarde cantidad negativa")
+    void elValorSinOrigenSaleEnPositivoConCantidadNegativa() {
+        Operation op = new Operation();
+        op.setQuantity(new BigDecimal("-100"));
+        op.setPendingQty(new BigDecimal("50"));
+        op.setTotal(new BigDecimal("1200"));
+
+        assertEquals(0, new BigDecimal("600.000000").compareTo(MissingOrigin.unmatchedValue(op)));
+    }
+
+    @Test
     @DisplayName("El dinero sin origen cuenta como aportación, no como ganancia del periodo")
     void elDineroSinOrigenCuentaComoAportacion() {
         PeriodBaseline b = baseline();
