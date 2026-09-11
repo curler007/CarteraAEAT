@@ -429,7 +429,7 @@ public class OperationController {
                 default -> null;
             };
             if (amount != null) byDay.merge(op.getDate(), amount, BigDecimal::add);
-            if (op.getType() == OperationType.TRASPASO_OUT) {
+            if (op.getType().reducesPosition()) {
                 BigDecimal unmatched = MissingOrigin.unmatchedValue(op);
                 if (unmatched.signum() > 0) byDay.merge(op.getDate(), unmatched.negate(), BigDecimal::add);
             }
