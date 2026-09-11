@@ -12,7 +12,10 @@ import java.util.List;
  * dinero llegase a él, y se valoraría a precios de cuando ni siquiera estaba ahí.
  *
  * @param openingValue valor de mercado de lo que había en cartera aquel día, en euros
- * @param boughtAfter  dinero nuevo que entró después: no es ganancia y no debe contar como tal
+ * @param boughtAfter  dinero nuevo que entró después: no es ganancia y no debe contar como tal.
+ *                     Suma las compras y también lo que apareció en la cartera sin compra detrás,
+ *                     que es lo que deja un traspaso cuyo fondo de origen no se ha importado
+ *                     (ver {@link MissingOrigin})
  * @param soldAfter    dinero que salió por ventas después, que sigue siendo del inversor
  * @param missing      valores que había aquel día y que no se han podido valorar. Mientras la
  *                     lista no esté vacía el periodo no es publicable: el valor inicial sale corto

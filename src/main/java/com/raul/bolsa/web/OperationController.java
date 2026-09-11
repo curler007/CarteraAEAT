@@ -10,6 +10,7 @@ import com.raul.bolsa.repository.SaleRecordRepository;
 import com.raul.bolsa.repository.SplitRepository;
 import com.raul.bolsa.service.OperationService;
 import com.raul.bolsa.web.dto.HistoryRow;
+import com.raul.bolsa.web.dto.MissingOrigin;
 import com.raul.bolsa.web.dto.OperationForm;
 import com.raul.bolsa.web.dto.SaleYearSummary;
 import com.raul.bolsa.web.dto.TickerInfo;
@@ -132,6 +133,7 @@ public class OperationController {
         model.addAttribute("totalCost", totalCost);
         model.addAttribute("salesByYear", salesByYear);
         model.addAttribute("unvalued", unvaluedOperations(uid));
+        model.addAttribute("missingOrigins", missingOrigins(uid));
 
         // Recorrido completo de la cartera: cuánto dinero ha entrado desde el principio y cuánto
         // se ha ganado con él, contando también lo que ya se vendió. La parte latente la suma el
@@ -412,8 +414,8 @@ public class OperationController {
      */
     /**
      * Movimientos de dinero de la cartera, un apunte por día, en orden cronológico. Las compras
-     * salen en negativo y las ventas en positivo; los traspasos y los canjes no aparecen, porque
-     * no mueven dinero.
+     * salen en negativo y las ventas en positivo; los traspasos y los canjes no aparecen, salvo
+     * la parte sin origen de una salida, que cuenta como dinero nuevo.
      *
      * <p>Se agrupan por día para no mandar al navegador cientos de apuntes del mismo día: la TIR
      * da el mismo resultado y la página baja de tamaño.
@@ -427,9 +429,25 @@ public class OperationController {
                 default -> null;
             };
             if (amount != null) byDay.merge(op.getDate(), amount, BigDecimal::add);
+            if (op.getType().reducesPosition()) {
+                BigDecimal unmatched = MissingOrigin.unmatchedValue(op);
+                if (unmatched.signum() > 0) byDay.merge(op.getDate(), unmatched.negate(), BigDecimal::add);
+            }
         }
         return byDay.entrySet().stream()
                 .map(e -> new com.raul.bolsa.web.dto.CashFlow(e.getKey().toString(), e.getValue()))
+                .toList();
+    }
+
+    /**
+     * Salidas de las que no consta cómo entraron los títulos. Mientras existan, la cartera lleva
+     * coste inventado y el detalle de qué falta es lo único que permite arreglarlo.
+     */
+    private List<MissingOrigin> missingOrigins(Long userId) {
+        return operationRepo
+                .findByUserIdAndPendingQtyGreaterThanOrderByDateAscIdAsc(userId, BigDecimal.ZERO)
+                .stream()
+                .map(MissingOrigin::of)
                 .toList();
     }
 

@@ -5,6 +5,7 @@ import com.raul.bolsa.domain.OperationType;
 import com.raul.bolsa.domain.Split;
 import com.raul.bolsa.repository.OperationRepository;
 import com.raul.bolsa.repository.SplitRepository;
+import com.raul.bolsa.web.dto.MissingOrigin;
 import com.raul.bolsa.web.dto.PeriodBaseline;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -87,7 +88,8 @@ public class PortfolioValuationService {
 
         missing.sort(Comparator.naturalOrder());
         return new PeriodBaseline(period, at.toString(), scaled(value),
-                scaled(sumAfter(operations, at, OperationType.BUY)),
+                scaled(sumAfter(operations, at, OperationType.BUY)
+                        .add(unmatchedAfter(operations, at))),
                 scaled(sumAfter(operations, at, OperationType.SELL)),
                 missing);
     }
@@ -136,6 +138,25 @@ public class PortfolioValuationService {
         return operations.stream()
                 .filter(op -> op.getType() == type && op.getDate().isAfter(at))
                 .map(Operation::getTotal)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    /**
+     * Dinero que apareció en la cartera sin compra que lo explique, después de {@code at}.
+     *
+     * <p>Cuenta como dinero nuevo, igual que una compra, y esa es la única lectura posible: la
+     * parte de una salida que no casó con ningún lote es valor que los libros no tenían y que a
+     * partir de ese día sí tienen, porque la entrada del traspaso lo dio de alta como posición.
+     * Sin sumarlo aquí se colaría entero en la variación del periodo, que mide precisamente el
+     * valor de hoy contra el de entonces más lo aportado por el camino: un traspaso al que le
+     * falta el origen se leería como una subida del mercado por su importe íntegro.
+     *
+     * @see com.raul.bolsa.web.dto.MissingOrigin
+     */
+    private BigDecimal unmatchedAfter(List<Operation> operations, LocalDate at) {
+        return operations.stream()
+                .filter(op -> op.getType().reducesPosition() && op.getDate().isAfter(at))
+                .map(MissingOrigin::unmatchedValue)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 

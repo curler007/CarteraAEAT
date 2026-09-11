@@ -40,6 +40,14 @@ public interface OperationRepository extends JpaRepository<Operation, Long> {
     List<Operation> findByUserIdAndTypeNotAndTotalLessThanEqualOrderByDateAscIdAsc(
             Long userId, OperationType type, BigDecimal total);
 
+    /**
+     * Salidas que el FIFO no pudo casar del todo, en orden cronológico: salieron títulos cuya
+     * compra no consta. Solo las ventas y las salidas de traspaso llegan a tener títulos
+     * pendientes, así que no hace falta filtrar por tipo.
+     */
+    List<Operation> findByUserIdAndPendingQtyGreaterThanOrderByDateAscIdAsc(
+            Long userId, BigDecimal pendingQty);
+
     /** Acceso por id comprobando propietario: evita que un usuario toque datos de otro. */
     Optional<Operation> findByIdAndUserId(Long id, Long userId);
 
