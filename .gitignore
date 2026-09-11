@@ -35,10 +35,20 @@ build/
 .DS_Store
 
 ### Project-specific ###
-bolsa.db
+# Cualquier base de datos de la raíz, no solo bolsa.db: las copias de seguridad
+# (bolsa_bak.db) llevan los mismos datos financieros reales y el repo es público.
+*.db
+*.db-wal
+*.db-shm
 bolsa.db.*
+!src/test/resources/**/*.db
 CLAUDE.md
 .claude/
+
 ### Exportaciones de brokers (datos personales) ###
 *.csv
 !src/test/resources/**/*.csv
+# El extracto de Inversis se descarga como .xls, así que el filtro de los CSV no lo tapaba.
+*.xls
+*.xlsx
+!src/test/resources/**/*.xls
