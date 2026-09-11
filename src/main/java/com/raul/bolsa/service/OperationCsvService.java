@@ -9,6 +9,7 @@ import com.raul.bolsa.repository.OperationRepository;
 import com.raul.bolsa.repository.SaleRecordRepository;
 import com.raul.bolsa.repository.SplitRepository;
 import com.raul.bolsa.web.dto.CsvImportResult;
+import com.raul.bolsa.web.dto.ImportConflict;
 import com.raul.bolsa.web.dto.InversisParseResult;
 import com.raul.bolsa.web.dto.ImportMode;
 import com.raul.bolsa.web.dto.OperationForm;
@@ -25,8 +26,12 @@ import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Exporta e importa la cartera de un usuario en un único CSV.
@@ -45,18 +50,22 @@ import java.util.Map;
 public class OperationCsvService {
 
     public static final String HEADER =
-            "Fecha;Tipo;Ticker;ISIN;Broker;Cantidad;Total;Comision;Grupo AEAT;Notas;Traspaso";
+            "Fecha;Tipo;Ticker;ISIN;Broker;Cantidad;Total;Comision;Grupo AEAT;Notas;Traspaso;Uid";
 
     private static final byte[] BOM = {(byte) 0xEF, (byte) 0xBB, (byte) 0xBF};
     private static final DateTimeFormatter OUT_DATE = DateTimeFormatter.ofPattern("dd/MM/yyyy");
     private static final char SEP = ';';
 
     /**
-     * La columna {@code Traspaso} se añadió después, así que un fichero exportado antes trae diez
-     * columnas y sigue siendo válido: sin traspasos no hay nada que emparejar.
+     * Las columnas {@code Traspaso} y {@code Uid} se añadieron después, así que un fichero
+     * exportado antes trae diez u once columnas y sigue siendo válido: sin traspasos no hay nada
+     * que emparejar, y sin uid cada fila se toma por una operación nueva, que es justo lo que
+     * pasaba antes de que existiera la columna.
      */
     private static final int COLUMNS_MIN = 10;
-    private static final int COLUMNS = 11;
+    private static final int COLUMNS = 12;
+    private static final int COL_TRANSFER = 10;
+    private static final int COL_UID = 11;
 
     /** Tipo reservado para las filas de split; el resto son valores de OperationType. */
     private static final String SPLIT = "SPLIT";
@@ -93,13 +102,14 @@ public class OperationCsvService {
                     op.getType() == OperationType.CANJE ? "" : num(op.getCommission()),
                     op.getAeatGroup().name(),
                     op.getNotes(),
-                    op.getTransferId()
+                    op.getTransferId(),
+                    op.getUid()
             });
         }
         for (Split s : splitRepo.findByUserId(userId)) {
             rows.add(new String[]{
                     OUT_DATE.format(s.getDate()), SPLIT, s.getTicker(),
-                    "", "", num(s.getRatio()), "", "", "", "", ""
+                    "", "", num(s.getRatio()), "", "", "", "", "", ""
             });
         }
 
@@ -133,6 +143,19 @@ public class OperationCsvService {
      */
     @Transactional
     public CsvImportResult importCsv(Long userId, byte[] content, ImportMode mode) {
+        return importCsv(userId, content, mode, null);
+    }
+
+    /**
+     * Igual, pero con las decisiones ya tomadas sobre las operaciones que el fichero trae
+     * cambiadas: las de {@code uidsToUpdate} se actualizan y el resto se dejan como están.
+     *
+     * @param uidsToUpdate null mientras nadie haya decidido nada, y entonces cualquier operación
+     *                     cambiada detiene la importación en vez de escribirse
+     */
+    @Transactional
+    public CsvImportResult importCsv(Long userId, byte[] content, ImportMode mode,
+                                     Set<String> uidsToUpdate) {
         // Antes de decodificar: el extracto de MyInvestor no es texto UTF-8 ni es un CSV.
         if (InversisXlsService.matches(content)) {
             return importInversis(userId, content, mode);
@@ -183,9 +206,26 @@ public class OperationCsvService {
             return CsvImportResult.failed(errors);
         }
 
+        // En REPLACE no hay nada con lo que chocar: la cartera se vacía y se reconstruye entera.
+        Incoming incoming = mode == ImportMode.REPLACE
+                ? new Incoming(operations, Map.of(), List.of(), 0)
+                : classify(userId, operations, uidsToUpdate);
+
+        if (!incoming.conflicts().isEmpty()) {
+            return CsvImportResult.undecided(FORMAT_OWN, incoming.conflicts());
+        }
+
         if (mode == ImportMode.REPLACE) {
             deleteEverythingOf(userId);
+        } else {
+            splits = newSplits(userId, splits);
         }
+
+        // Lo que cambia va antes que lo que nace: así el FIFO se reconstruye una sola vez sobre
+        // los datos definitivos en lugar de dos, con los viejos por medio.
+        incoming.updates().forEach((id, f) -> operationService.update(userId, id, f));
+
+        operations = incoming.nuevas();
 
         // Las operaciones primero y los splits después, en orden cronológico: es el mismo
         // camino que valida ReplayConsistencyTest.
@@ -204,10 +244,128 @@ public class OperationCsvService {
             splits.forEach(f -> splitService.save(userId, f));
         }
 
-        log.info("Importadas {} operaciones y {} splits para el usuario {} (modo {})",
-                operations.size(), splits.size(), userId, mode);
-        return new CsvImportResult(FORMAT_OWN, operations.size(), splits.size(),
-                Map.of(), 0, List.of(), List.of(), List.of());
+        log.info("Importadas {} operaciones ({} actualizadas, {} ya estaban) y {} splits "
+                        + "para el usuario {} (modo {})",
+                operations.size(), incoming.updates().size(), incoming.duplicates(),
+                splits.size(), userId, mode);
+        return new CsvImportResult(FORMAT_OWN,
+                operations.size() + incoming.updates().size(), splits.size(),
+                Map.of(), incoming.duplicates(), List.of(), List.of(), List.of(), List.of());
+    }
+
+    // ─── Reconocimiento de lo ya importado ───────────────────────────────────
+
+    /** Reparto de las filas del fichero contra lo que el usuario ya tiene guardado. */
+    private record Incoming(List<OperationForm> nuevas,
+                            Map<Long, OperationForm> updates,
+                            List<ImportConflict> conflicts,
+                            int duplicates) {}
+
+    /**
+     * Separa las filas en las que son nuevas, las que ya estaban igual y las que ya estaban pero
+     * han cambiado.
+     *
+     * <p>El reconocimiento va por {@code uid} y solo por él. Una clave deducida del contenido
+     * —fecha, valor, tipo e importe— parece equivalente y no lo es: dos ejecuciones idénticas
+     * del mismo valor el mismo día son dos operaciones legítimas y se fundirían en una sin que
+     * nadie se enterara. Una fila sin uid es una operación nueva por definición, que es también
+     * la salida para quien copie una fila a mano en la hoja de cálculo y borre su uid.
+     *
+     * @param uidsToUpdate qué operaciones cambiadas hay que sobrescribir; null si aún no se ha
+     *                     preguntado, y entonces cualquier cambio sale como conflicto
+     */
+    private Incoming classify(Long userId, List<OperationForm> parsed, Set<String> uidsToUpdate) {
+        Map<String, Operation> byUid = new HashMap<>();
+        for (Operation op : operationRepo.findByUserId(userId)) {
+            if (op.getUid() != null && !op.getUid().isBlank()) {
+                byUid.put(op.getUid(), op);
+            }
+        }
+
+        List<OperationForm> nuevas = new ArrayList<>();
+        Map<Long, OperationForm> updates = new LinkedHashMap<>();
+        List<ImportConflict> conflicts = new ArrayList<>();
+        int duplicates = 0;
+
+        for (OperationForm f : parsed) {
+            Operation prev = f.getUid() == null ? null : byUid.get(f.getUid());
+            if (prev == null) {
+                nuevas.add(f);
+                continue;
+            }
+            List<ImportConflict.FieldDiff> diffs = differences(prev, f);
+            if (diffs.isEmpty()) {
+                duplicates++;
+            } else if (uidsToUpdate == null) {
+                conflicts.add(new ImportConflict(f.getUid(), prev.getDate(), prev.getTicker(),
+                        prev.getAssetName(), diffs));
+            } else if (uidsToUpdate.contains(f.getUid())) {
+                updates.put(prev.getId(), f);
+            }
+            // Cambiada y no elegida: el usuario ha dicho que se quede como está.
+        }
+        return new Incoming(nuevas, updates, conflicts, duplicates);
+    }
+
+    /**
+     * Campos en los que la fila del fichero no coincide con la operación guardada, ya formateados.
+     *
+     * <p>Los textos se comparan normalizados igual que al guardar —el ticker en mayúsculas, el
+     * resto sin espacios alrededor— porque si no una fila recién exportada chocaría consigo misma.
+     * Y los importes por {@code compareTo}, que 100 y 100,00 son el mismo dinero.
+     */
+    private static List<ImportConflict.FieldDiff> differences(Operation prev, OperationForm f) {
+        List<ImportConflict.FieldDiff> diffs = new ArrayList<>();
+        diff(diffs, "Fecha", OUT_DATE.format(prev.getDate()), OUT_DATE.format(f.getDate()));
+        diff(diffs, "Tipo", prev.getType().name(), f.getType().name());
+        diff(diffs, "Ticker", prev.getTicker(), f.getTicker().trim().toUpperCase());
+        diff(diffs, "ISIN", prev.getAssetName(), f.getAssetName().trim());
+        diff(diffs, "Broker", prev.getBroker(), f.getBroker().trim());
+        diffNum(diffs, "Cantidad", prev.getQuantity(), f.getQuantity());
+        diffNum(diffs, "Total", prev.getTotal(), f.getTotal());
+        diffNum(diffs, "Comisión", prev.getCommission(), f.getCommission());
+        diff(diffs, "Grupo AEAT", prev.getAeatGroup().name(), f.getAeatGroup().name());
+        diff(diffs, "Notas", prev.getNotes(), f.getNotes());
+        diff(diffs, "Traspaso", prev.getTransferId(), f.getTransferId());
+        return diffs;
+    }
+
+    private static void diff(List<ImportConflict.FieldDiff> diffs, String field,
+                             String current, String incoming) {
+        String a = current == null ? "" : current.trim();
+        String b = incoming == null ? "" : incoming.trim();
+        if (!a.equals(b)) {
+            diffs.add(new ImportConflict.FieldDiff(field, a, b));
+        }
+    }
+
+    private static void diffNum(List<ImportConflict.FieldDiff> diffs, String field,
+                                BigDecimal current, BigDecimal incoming) {
+        BigDecimal a = current == null ? BigDecimal.ZERO : current;
+        BigDecimal b = incoming == null ? BigDecimal.ZERO : incoming;
+        if (a.compareTo(b) != 0) {
+            diffs.add(new ImportConflict.FieldDiff(field, num(a), num(b)));
+        }
+    }
+
+    /**
+     * Los splits que el usuario todavía no tiene. No llevan uid: su identidad es el hecho mismo
+     * —un valor se desdobla una vez un día dado—, y un ratio repetido no es un split más sino el
+     * mismo contado dos veces, que multiplicaría los títulos por el ratio otra vez.
+     */
+    private List<SplitForm> newSplits(Long userId, List<SplitForm> parsed) {
+        Set<String> existing = splitRepo.findByUserId(userId).stream()
+                .map(sp -> splitKey(sp.getTicker(), sp.getDate(), sp.getRatio()))
+                .collect(Collectors.toSet());
+        // Mutable: quien la recibe todavía tiene que ordenarla por fecha.
+        return parsed.stream()
+                .filter(f -> existing.add(
+                        splitKey(f.getTicker(), f.getDate(), f.getRatio())))
+                .collect(Collectors.toCollection(ArrayList::new));
+    }
+
+    private static String splitKey(String ticker, LocalDate date, BigDecimal ratio) {
+        return ticker.trim().toUpperCase() + "|" + date + "|" + ratio.stripTrailingZeros().toPlainString();
     }
 
     // ─── Importación de Trade Republic ───────────────────────────────────────
@@ -232,7 +390,8 @@ public class OperationCsvService {
         // nuevos, y el usuario no tiene nada que corregir.
         if (parsed.operations().isEmpty() && parsed.duplicates() > 0) {
             return new CsvImportResult(FORMAT_TRADE_REPUBLIC, 0, 0,
-                    parsed.ignored(), parsed.duplicates(), List.of(), List.of(), List.of());
+                    parsed.ignored(), parsed.duplicates(), List.of(), List.of(), List.of(),
+                    List.of());
         }
         if (parsed.operations().isEmpty()) {
             return CsvImportResult.failed(
@@ -252,7 +411,7 @@ public class OperationCsvService {
                 operations.size(), userId, mode, parsed.ignoredCount(), parsed.duplicates());
         return new CsvImportResult(FORMAT_TRADE_REPUBLIC, operations.size(), 0,
                 parsed.ignored(), parsed.duplicates(), parsed.pendingValuation(),
-                List.of(), List.of());
+                List.of(), List.of(), List.of());
     }
 
     // ─── Importación de MyInvestor (Inversis) ────────────────────────────────
@@ -280,7 +439,8 @@ public class OperationCsvService {
         // nuevos, y el usuario no tiene nada que corregir.
         if (parsed.operations().isEmpty()) {
             return new CsvImportResult(FORMAT_INVERSIS, 0, 0,
-                    parsed.ignored(), parsed.duplicates(), List.of(), List.of(), List.of());
+                    parsed.ignored(), parsed.duplicates(), List.of(), List.of(), List.of(),
+                    List.of());
         }
 
         if (mode == ImportMode.REPLACE) {
@@ -297,7 +457,7 @@ public class OperationCsvService {
                 operations.size(), userId, mode, parsed.ignoredCount(), parsed.duplicates());
         return new CsvImportResult(FORMAT_INVERSIS, operations.size(), 0,
                 parsed.ignored(), parsed.duplicates(), List.of(),
-                parsed.transferWarnings(), List.of());
+                parsed.transferWarnings(), List.of(), List.of());
     }
 
     private void deleteEverythingOf(Long userId) {
@@ -339,7 +499,8 @@ public class OperationCsvService {
         f.setQuantity(positive(row.get(5), "Cantidad"));
         f.setAeatGroup(aeatGroup(row.get(8)));
         f.setNotes(blankToNull(row.get(9)));
-        f.setTransferId(row.size() > 10 ? blankToNull(row.get(10)) : null);
+        f.setTransferId(row.size() > COL_TRANSFER ? blankToNull(row.get(COL_TRANSFER)) : null);
+        f.setUid(row.size() > COL_UID ? blankToNull(row.get(COL_UID)) : null);
 
         if (opType == OperationType.CANJE) {
             // Acciones liberadas: sin coste ni comisión (LIRPF Art. 37.1.a)

@@ -49,4 +49,11 @@ public class OperationForm {
 
     /** Empareja las dos patas de un traspaso entre fondos; null en el resto de operaciones. */
     private String transferId;
+
+    /**
+     * Identidad estable de la operación, cuando ya la tiene. Viaja por el formulario para que
+     * editar una operación no la convierta en otra distinta, y llega del CSV para reconocer lo
+     * ya importado. Vacío significa "operación nueva", y entonces se asigna al insertar.
+     */
+    private String uid;
 }
