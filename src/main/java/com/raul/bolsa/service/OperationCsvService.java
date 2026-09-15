@@ -218,12 +218,16 @@ public class OperationCsvService {
         if (mode == ImportMode.REPLACE) {
             deleteEverythingOf(userId);
         } else {
-            splits = newSplits(userId, splits);
+            splits = newSplits(userId, splits, errors);
+            if (!errors.isEmpty()) {
+                return CsvImportResult.failed(errors);
+            }
         }
 
         // Lo que cambia va antes que lo que nace: así el FIFO se reconstruye una sola vez sobre
         // los datos definitivos en lugar de dos, con los viejos por medio.
-        incoming.updates().forEach((id, f) -> operationService.update(userId, id, f));
+        boolean hasUpdates = !incoming.updates().isEmpty();
+        incoming.updates().forEach((id, f) -> operationService.updateDeferred(userId, id, f));
 
         operations = incoming.nuevas();
 
@@ -233,7 +237,7 @@ public class OperationCsvService {
         // Con traspasos de por medio cada alta recalcularía la cartera entera, así que el fichero
         // se carga de una vez y se recalcula al final. Sin ellos se conserva el alta operación a
         // operación, que resuelve el FIFO por valor y no hace falta tocar.
-        if (operations.stream().anyMatch(f -> f.getType().isTransfer())) {
+        if (hasUpdates || operations.stream().anyMatch(f -> f.getType().isTransfer())) {
             operations.forEach(f -> operationService.saveDeferred(userId, f));
             splits.sort(Comparator.comparing(SplitForm::getDate));
             splits.forEach(f -> splitService.saveWithoutRecalc(userId, f));
@@ -353,19 +357,33 @@ public class OperationCsvService {
      * —un valor se desdobla una vez un día dado—, y un ratio repetido no es un split más sino el
      * mismo contado dos veces, que multiplicaría los títulos por el ratio otra vez.
      */
-    private List<SplitForm> newSplits(Long userId, List<SplitForm> parsed) {
-        Set<String> existing = splitRepo.findByUserId(userId).stream()
-                .map(sp -> splitKey(sp.getTicker(), sp.getDate(), sp.getRatio()))
-                .collect(Collectors.toSet());
-        // Mutable: quien la recibe todavía tiene que ordenarla por fecha.
-        return parsed.stream()
-                .filter(f -> existing.add(
-                        splitKey(f.getTicker(), f.getDate(), f.getRatio())))
-                .collect(Collectors.toCollection(ArrayList::new));
+    private List<SplitForm> newSplits(Long userId, List<SplitForm> parsed, List<String> errors) {
+        Map<String, BigDecimal> existing = splitRepo.findByUserId(userId).stream()
+                .collect(Collectors.toMap(
+                        sp -> splitIdentity(sp.getTicker(), sp.getDate()),
+                        Split::getRatio,
+                        (a, b) -> a,
+                        LinkedHashMap::new));
+        List<SplitForm> out = new ArrayList<>();
+        for (SplitForm f : parsed) {
+            String key = splitIdentity(f.getTicker(), f.getDate());
+            BigDecimal ratio = existing.get(key);
+            if (ratio == null) {
+                existing.put(key, f.getRatio());
+                out.add(f);
+                continue;
+            }
+            if (ratio.compareTo(f.getRatio()) != 0) {
+                errors.add("Split duplicado con ratio distinto para "
+                        + f.getTicker().trim().toUpperCase() + " en " + OUT_DATE.format(f.getDate())
+                        + ": ya existe ratio " + num(ratio) + " y el fichero trae " + num(f.getRatio()) + ".");
+            }
+        }
+        return out;
     }
 
-    private static String splitKey(String ticker, LocalDate date, BigDecimal ratio) {
-        return ticker.trim().toUpperCase() + "|" + date + "|" + ratio.stripTrailingZeros().toPlainString();
+    private static String splitIdentity(String ticker, LocalDate date) {
+        return ticker.trim().toUpperCase() + "|" + date;
     }
 
     // ─── Importación de Trade Republic ───────────────────────────────────────

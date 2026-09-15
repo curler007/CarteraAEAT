@@ -20,8 +20,11 @@ import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 import java.io.IOException;
 import java.time.LocalDate;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 
 /**
  * Exportación e importación de la cartera del usuario en CSV.
@@ -36,11 +39,12 @@ public class OperationCsvController {
      * vienen cambiadas. No se puede pedir que lo vuelva a elegir: el navegador no rellena un
      * input de fichero por su cuenta, y hacerle repetir la subida para confirmar sería absurdo.
      */
-    private static final String PENDING_FILE = "importPendingFile";
-    private static final String PENDING_MODE = "importPendingMode";
+    private static final String PENDING_IMPORTS = "importPendingByToken";
 
     private final OperationCsvService csvService;
     private final CurrentUser currentUser;
+
+    private record PendingImport(byte[] bytes, ImportMode mode) {}
 
     @GetMapping("/operations/export.csv")
     public ResponseEntity<byte[]> export() {
@@ -104,10 +108,11 @@ public class OperationCsvController {
         CsvImportResult result = csvService.importCsv(currentUser.id(), bytes, mode);
 
         if (result.needsDecision()) {
-            session.setAttribute(PENDING_FILE, bytes);
-            session.setAttribute(PENDING_MODE, mode);
+            String token = UUID.randomUUID().toString();
+            pendingImports(session).put(token, new PendingImport(bytes, mode));
             model.addAttribute("conflicts", result.conflicts());
             model.addAttribute("mode", mode);
+            model.addAttribute("token", token);
             return "operations/import-conflicts";
         }
 
@@ -164,21 +169,18 @@ public class OperationCsvController {
      */
     @PostMapping("/operations/import/resolver")
     public String resolveConflicts(@RequestParam(name = "update", required = false) Set<String> update,
+                                   @RequestParam("token") String token,
                                    HttpSession session,
                                    Model model,
                                    RedirectAttributes flash) {
-        byte[] bytes = (byte[]) session.getAttribute(PENDING_FILE);
-        ImportMode mode = (ImportMode) session.getAttribute(PENDING_MODE);
-        if (bytes == null || mode == null) {
+        PendingImport pending = pendingImports(session).remove(token);
+        if (pending == null) {
             flash.addFlashAttribute("error",
                     "La importación ha caducado. Vuelve a subir el fichero.");
             return "redirect:/operations/import";
         }
-        session.removeAttribute(PENDING_FILE);
-        session.removeAttribute(PENDING_MODE);
-
         CsvImportResult result = csvService.importCsv(
-                currentUser.id(), bytes, mode, update == null ? Set.of() : update);
+                currentUser.id(), pending.bytes(), pending.mode(), update == null ? Set.of() : update);
 
         if (!result.ok()) {
             model.addAttribute("header", OperationCsvService.HEADER);
@@ -188,5 +190,15 @@ public class OperationCsvController {
             return "operations/import";
         }
         return finish(result, flash);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, PendingImport> pendingImports(HttpSession session) {
+        Map<String, PendingImport> pending = (Map<String, PendingImport>) session.getAttribute(PENDING_IMPORTS);
+        if (pending == null) {
+            pending = new HashMap<>();
+            session.setAttribute(PENDING_IMPORTS, pending);
+        }
+        return pending;
     }
 }

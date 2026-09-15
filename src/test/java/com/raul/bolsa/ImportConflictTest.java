@@ -39,6 +39,8 @@ import java.nio.file.Path;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -118,15 +120,18 @@ class ImportConflictTest {
         assertTrue(html.contains("Total"), "y qué campo cambia");
         assertTrue(html.contains("1500") && html.contains("1600"),
                 "enseñando el valor de antes y el del fichero: " + html);
+        assertTrue(html.contains("name=\"_csrf\""), "el formulario debe enviar el token CSRF");
         assertEquals(0, total().compareTo(new BigDecimal("1500")),
                 "mientras se pregunta no se ha escrito nada");
 
         String identidad = operationRepo.findByUserId(uid).get(0).getUid();
+        String token = hiddenValue(html, "token");
         HttpSession sesion = subida.getRequest().getSession(false);
         assertTrue(sesion != null, "el fichero tiene que esperar en la sesión a la respuesta");
 
         mvc.perform(post("/operations/import/resolver")
                         .session((org.springframework.mock.web.MockHttpSession) sesion)
+                        .param("token", token)
                         .param("update", identidad))
                 .andExpect(status().is3xxRedirection());
 
@@ -144,6 +149,45 @@ class ImportConflictTest {
         assertTrue(csv().startsWith("﻿" + OperationCsvService.HEADER)
                         || csv().contains(OperationCsvService.HEADER),
                 "la cabecera debe anunciar la columna: " + OperationCsvService.HEADER);
+    }
+
+    @Test
+    @DisplayName("Cada confirmación usa su token: una importación pendiente no pisa otra")
+    void pendingImportIsBoundToItsToken() throws Exception {
+        CsrfToken csrf = new DefaultCsrfToken("X-CSRF-TOKEN", "_csrf", "token-de-prueba");
+        var session = new org.springframework.mock.web.MockHttpSession();
+
+        MvcResult primera = mvc.perform(multipart("/operations/import")
+                        .file(new MockMultipartFile("file", "uno.csv", "text/csv", cambiandoElTotal("1600")))
+                        .param("mode", "ADD")
+                        .session(session)
+                        .requestAttr(CsrfToken.class.getName(), csrf)
+                        .requestAttr("_csrf", csrf))
+                .andExpect(status().isOk())
+                .andExpect(view().name("operations/import-conflicts"))
+                .andReturn();
+        String token1 = hiddenValue(primera.getResponse().getContentAsString(), "token");
+
+        MvcResult segunda = mvc.perform(multipart("/operations/import")
+                        .file(new MockMultipartFile("file", "dos.csv", "text/csv", cambiandoElTotal("1700")))
+                        .param("mode", "ADD")
+                        .session(session)
+                        .requestAttr(CsrfToken.class.getName(), csrf)
+                        .requestAttr("_csrf", csrf))
+                .andExpect(status().isOk())
+                .andExpect(view().name("operations/import-conflicts"))
+                .andReturn();
+        String token2 = hiddenValue(segunda.getResponse().getContentAsString(), "token");
+        assertFalse(token1.equals(token2), "cada importación pendiente necesita su token propio");
+
+        String identidad = operationRepo.findByUserId(uid).get(0).getUid();
+        mvc.perform(post("/operations/import/resolver")
+                        .session(session)
+                        .param("token", token1)
+                        .param("update", identidad))
+                .andExpect(status().is3xxRedirection());
+        assertEquals(0, total().compareTo(new BigDecimal("1600")),
+                "resolver el primer token debe aplicar el primer fichero");
     }
 
     @Test
@@ -258,5 +302,12 @@ class ImportConflictTest {
         f.setCommission(BigDecimal.ZERO);
         f.setAeatGroup(AeatGroup.GROUP_3);
         return f;
+    }
+
+    private static String hiddenValue(String html, String name) {
+        Matcher m = Pattern.compile("name=\"" + Pattern.quote(name) + "\"\\s+value=\"([^\"]+)\"")
+                .matcher(html);
+        assertTrue(m.find(), () -> "falta el hidden " + name + " en:\n" + html);
+        return m.group(1);
     }
 }

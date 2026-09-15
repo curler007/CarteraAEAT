@@ -217,6 +217,24 @@ class CsvRoundTripTest {
     }
 
     @Test
+    @DisplayName("Un split ya existente con ratio distinto se rechaza como conflicto")
+    void splitWithDifferentRatioIsRejected() {
+        buildPortfolio(alice);
+        csvService.importCsv(bob, csvService.export(alice), ImportMode.ADD);
+
+        String changed = new String(csvService.export(alice), StandardCharsets.UTF_8)
+                .replace(";SPLIT;NVIDIA;;;10;", ";SPLIT;NVIDIA;;;2;");
+        CsvImportResult result = csvService.importCsv(
+                bob, changed.getBytes(StandardCharsets.UTF_8), ImportMode.ADD);
+
+        assertFalse(result.ok(), "No debería aceptar el mismo split con ratio distinto");
+        assertTrue(result.errors().stream().anyMatch(e -> e.contains("ratio distinto")),
+                () -> "Debería explicar el conflicto de ratio: " + result.errors());
+        assertEquals(1, splitRepo.findByUserId(bob).size(),
+                "El split original debe mantenerse sin duplicados");
+    }
+
+    @Test
     @DisplayName("Un fichero inválido se rechaza entero, indicando la línea")
     void invalidFileImportsNothing() {
         buildPortfolio(alice);
