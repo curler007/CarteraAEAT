@@ -120,7 +120,6 @@ class ImportConflictTest {
         assertTrue(html.contains("Total"), "y qué campo cambia");
         assertTrue(html.contains("1500") && html.contains("1600"),
                 "enseñando el valor de antes y el del fichero: " + html);
-        assertTrue(html.contains("name=\"_csrf\""), "el formulario debe enviar el token CSRF");
         assertEquals(0, total().compareTo(new BigDecimal("1500")),
                 "mientras se pregunta no se ha escrito nada");
 

@@ -235,6 +235,42 @@ class CsvRoundTripTest {
     }
 
     @Test
+    @DisplayName("Un ratio contradictorio se avisa antes de preguntar por las operaciones cambiadas")
+    void splitRatioErrorComesBeforeConflicts() {
+        buildPortfolio(alice);
+        csvService.importCsv(bob, csvService.export(alice), ImportMode.ADD);
+
+        String changed = new String(csvService.export(alice), StandardCharsets.UTF_8)
+                .replace(";SPLIT;NVIDIA;;;10;", ";SPLIT;NVIDIA;;;2;")
+                .replace(";Trade Republic;10;1000;2;", ";Trade Republic;10;1100;2;");
+        assertTrue(changed.contains(";1100;"), "el escenario necesita una operación cambiada");
+        CsvImportResult result = csvService.importCsv(
+                bob, changed.getBytes(StandardCharsets.UTF_8), ImportMode.ADD);
+
+        assertFalse(result.needsDecision(),
+                "No tiene sentido hacer decidir sobre un fichero que luego se va a rechazar");
+        assertTrue(result.errors().stream().anyMatch(e -> e.contains("ratio distinto")),
+                () -> "Debería explicar el conflicto de ratio: " + result.errors());
+    }
+
+    @Test
+    @DisplayName("Dos filas del mismo split con ratios distintos se rechazan")
+    void contradictorySplitsInsideTheFileAreRejected() {
+        buildPortfolio(alice);
+        String csv = new String(csvService.export(alice), StandardCharsets.UTF_8);
+        String splitRow = csv.lines().filter(l -> l.contains(";SPLIT;NVIDIA;")).findFirst().orElseThrow();
+        String withTwin = csv + "\n" + splitRow.replace(";SPLIT;NVIDIA;;;10;", ";SPLIT;NVIDIA;;;2;") + "\n";
+
+        CsvImportResult result = csvService.importCsv(
+                bob, withTwin.getBytes(StandardCharsets.UTF_8), ImportMode.ADD);
+
+        assertFalse(result.ok(), "No se puede elegir en silencio uno de los dos ratios");
+        assertTrue(result.errors().stream().anyMatch(e -> e.contains("el fichero trae otro")),
+                () -> "El aviso no debe decir que ya existe, porque no está guardado: " + result.errors());
+        assertEquals(0, splitRepo.findByUserId(bob).size(), "y no debe escribirse nada");
+    }
+
+    @Test
     @DisplayName("Un fichero inválido se rechaza entero, indicando la línea")
     void invalidFileImportsNothing() {
         buildPortfolio(alice);

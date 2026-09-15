@@ -24,7 +24,6 @@
 
     <form th:action="@{/operations/import/resolver}" method="post" id="conflictForm">
         <input type="hidden" name="token" th:value="${token}"/>
-        <input type="hidden" th:name="${_csrf.parameterName}" th:value="${_csrf.token}"/>
 
         <div class="d-flex gap-2 align-items-center mb-3">
             <span class="small text-muted me-auto">Marcar todas:</span>

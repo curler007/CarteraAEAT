@@ -206,6 +206,15 @@ public class OperationCsvService {
             return CsvImportResult.failed(errors);
         }
 
+        // Los splits se revisan antes que las operaciones: un ratio contradictorio tumba el fichero
+        // entero, y descubrirlo después de haber preguntado por los cambios haría decidir en balde.
+        if (mode == ImportMode.ADD) {
+            splits = newSplits(userId, splits, errors);
+            if (!errors.isEmpty()) {
+                return CsvImportResult.failed(errors);
+            }
+        }
+
         // En REPLACE no hay nada con lo que chocar: la cartera se vacía y se reconstruye entera.
         Incoming incoming = mode == ImportMode.REPLACE
                 ? new Incoming(operations, Map.of(), List.of(), 0)
@@ -217,11 +226,6 @@ public class OperationCsvService {
 
         if (mode == ImportMode.REPLACE) {
             deleteEverythingOf(userId);
-        } else {
-            splits = newSplits(userId, splits, errors);
-            if (!errors.isEmpty()) {
-                return CsvImportResult.failed(errors);
-            }
         }
 
         // Lo que cambia va antes que lo que nace: así el FIFO se reconstruye una sola vez sobre
@@ -356,27 +360,35 @@ public class OperationCsvService {
      * Los splits que el usuario todavía no tiene. No llevan uid: su identidad es el hecho mismo
      * —un valor se desdobla una vez un día dado—, y un ratio repetido no es un split más sino el
      * mismo contado dos veces, que multiplicaría los títulos por el ratio otra vez.
+     *
+     * <p>El mismo valor y día con otro ratio no es ni nuevo ni repetido, así que es un error: ya
+     * sea contra lo guardado o contra otra fila del propio fichero.
      */
     private List<SplitForm> newSplits(Long userId, List<SplitForm> parsed, List<String> errors) {
-        Map<String, BigDecimal> existing = splitRepo.findByUserId(userId).stream()
+        Map<String, BigDecimal> stored = splitRepo.findByUserId(userId).stream()
                 .collect(Collectors.toMap(
                         sp -> splitIdentity(sp.getTicker(), sp.getDate()),
                         Split::getRatio,
-                        (a, b) -> a,
-                        LinkedHashMap::new));
+                        (a, b) -> a));
+        Map<String, BigDecimal> inFile = new HashMap<>();
         List<SplitForm> out = new ArrayList<>();
         for (SplitForm f : parsed) {
             String key = splitIdentity(f.getTicker(), f.getDate());
-            BigDecimal ratio = existing.get(key);
-            if (ratio == null) {
-                existing.put(key, f.getRatio());
-                out.add(f);
-                continue;
+            BigDecimal previous = stored.get(key);
+            String where = "ya existe";
+            if (previous == null) {
+                previous = inFile.putIfAbsent(key, f.getRatio());
+                where = "el fichero trae otro";
+                if (previous == null) {
+                    out.add(f);
+                    continue;
+                }
             }
-            if (ratio.compareTo(f.getRatio()) != 0) {
+            if (previous.compareTo(f.getRatio()) != 0) {
                 errors.add("Split duplicado con ratio distinto para "
                         + f.getTicker().trim().toUpperCase() + " en " + OUT_DATE.format(f.getDate())
-                        + ": ya existe ratio " + num(ratio) + " y el fichero trae " + num(f.getRatio()) + ".");
+                        + ": " + where + " con ratio " + num(previous)
+                        + " y esta fila trae " + num(f.getRatio()) + ".");
             }
         }
         return out;
