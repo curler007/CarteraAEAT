@@ -52,20 +52,16 @@
                 <li class="nav-item">
                     <a class="nav-link" href="/splits"><i class="bi bi-scissors me-1"></i>Splits</a>
                 </li>
-                <li class="nav-item">
-                    <a class="nav-link" href="/gemelos"><i class="bi bi-link-45deg me-1"></i>Gemelos</a>
-                </li>
                 <li class="nav-item" sec:authorize="hasRole('ADMIN')">
                     <a class="nav-link" href="/admin/users"><i class="bi bi-people me-1"></i>Usuarios</a>
                 </li>
             </ul>
+            <!--
+              Aquí solo queda quién eres y salir. Dar de alta una operación o un split es algo que
+              se hace mirando el historial, así que esos botones viven en Operaciones, junto al
+              resto de acciones sobre la cartera, y no colgando de la barra en todas las páginas.
+            -->
             <div class="d-flex gap-2 align-items-center">
-                <a class="btn btn-outline-light btn-sm" href="/splits/new">
-                    <i class="bi bi-scissors me-1"></i>Nuevo split
-                </a>
-                <a class="btn btn-success btn-sm" href="/operations/new">
-                    <i class="bi bi-plus-lg me-1"></i>Nueva operación
-                </a>
                 <span class="navbar-text small text-light-emphasis d-none d-lg-inline"
                       sec:authentication="name">usuario</span>
                 <form th:action="@{/logout}" method="post" class="mb-0">

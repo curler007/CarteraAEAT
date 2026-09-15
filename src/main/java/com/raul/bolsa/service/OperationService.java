@@ -103,6 +103,19 @@ public class OperationService {
      */
     @Transactional
     public Operation update(Long userId, Long id, OperationForm form) {
+        return update(userId, id, form, true);
+    }
+
+    /**
+     * Igual que {@link #update(Long, Long, OperationForm)} pero sin recálculo inmediato.
+     * Solo para cargas masivas que recalculan una única vez al final.
+     */
+    @Transactional
+    public Operation updateDeferred(Long userId, Long id, OperationForm form) {
+        return update(userId, id, form, false);
+    }
+
+    private Operation update(Long userId, Long id, OperationForm form, boolean recalculateNow) {
         Operation existing = requireOwned(userId, id);
         String oldTicker = existing.getTicker();
         String newTicker = form.getTicker().trim().toUpperCase();
@@ -131,13 +144,15 @@ public class OperationService {
             fifoService.createLot(op);
         }
 
-        // 5. Recalcular FIFO para el ticker nuevo (reprocesa todas las ventas en orden).
-        //    recalculateFifo() se encarga de pasar a la cartera entera si hay traspasos.
-        fifoService.recalculateFifo(userId, newTicker);
+        if (recalculateNow) {
+            // 5. Recalcular FIFO para el ticker nuevo (reprocesa todas las ventas en orden).
+            //    recalculateFifo() se encarga de pasar a la cartera entera si hay traspasos.
+            fifoService.recalculateFifo(userId, newTicker);
 
-        // 6. Si el ticker cambió, recalcular también el antiguo
-        if (!oldTicker.equals(newTicker)) {
-            fifoService.recalculateFifo(userId, oldTicker);
+            // 6. Si el ticker cambió, recalcular también el antiguo
+            if (!oldTicker.equals(newTicker)) {
+                fifoService.recalculateFifo(userId, oldTicker);
+            }
         }
 
         return op;
@@ -200,6 +215,9 @@ public class OperationService {
         op.setAeatGroup(form.getAeatGroup());
         op.setNotes(form.getNotes());
         op.setTransferId(form.getTransferId());
+        // Vacío en un alta normal: lo rellena Operation.assignUid() al insertar. Viene relleno
+        // al editar y al importar, y entonces se conserva, que es lo que hace estable la identidad.
+        op.setUid(form.getUid());
 
         if (form.getType() == OperationType.CANJE) {
             op.setTotal(BigDecimal.ZERO);

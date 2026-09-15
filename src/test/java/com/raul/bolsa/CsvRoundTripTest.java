@@ -167,16 +167,107 @@ class CsvRoundTripTest {
     @DisplayName("Añadir dos veces el mismo fichero duplica, y no toca al otro usuario")
     void addModeAccumulates() {
         buildPortfolio(alice);
+        buildPortfolio(bob);
+        int propias = operationRepo.findByUserId(bob).size();
+
+        csvService.importCsv(bob, csvService.export(alice), ImportMode.ADD);
+
+        assertEquals(propias * 2, operationRepo.findByUserId(bob).size(),
+                "El modo añadir debería acumular: las de Bob más las que llegan de Alice");
+        assertEquals(7, operationRepo.findByUserId(alice).size(),
+                "La cartera de Alice no debe verse afectada por las importaciones de Bob");
+    }
+
+    /**
+     * Cada operación viaja en el CSV con su uid, que es lo que permite reconocerla al volver.
+     * Sin él, reimportar el histórico completo —lo natural cuando no recuerdas por dónde ibas—
+     * dejaba la cartera con todo por duplicado y el FIFO sin sentido.
+     */
+    @Test
+    @DisplayName("Reimportar el mismo fichero no duplica nada")
+    void reimportingTheSameFileAddsNothing() {
+        buildPortfolio(alice);
         byte[] csv = csvService.export(alice);
 
         csvService.importCsv(bob, csv, ImportMode.ADD);
         int afterFirst = operationRepo.findByUserId(bob).size();
+        CsvImportResult second = csvService.importCsv(bob, csv, ImportMode.ADD);
+
+        assertTrue(second.ok(), () -> "Reimportar lo mismo no es un error: " + second.errors());
+        assertEquals(afterFirst, operationRepo.findByUserId(bob).size(),
+                "Las operaciones ya presentes deberían reconocerse por su uid y omitirse");
+        assertEquals(afterFirst, second.duplicates(),
+                "y contarse como ya presentes para poder decírselo al usuario");
+        assertEquals(0, second.operations(), "no debería haber entrado ninguna operación nueva");
+    }
+
+    @Test
+    @DisplayName("Reimportar tampoco duplica los splits, que doblarían el ratio")
+    void reimportingDoesNotDuplicateSplits() {
+        buildPortfolio(alice);
+        byte[] csv = csvService.export(alice);
+
+        csvService.importCsv(bob, csv, ImportMode.ADD);
+        long afterFirst = splitRepo.findByUserId(bob).size();
         csvService.importCsv(bob, csv, ImportMode.ADD);
 
-        assertEquals(afterFirst * 2, operationRepo.findByUserId(bob).size(),
-                "El modo añadir debería acumular");
-        assertEquals(7, operationRepo.findByUserId(alice).size(),
-                "La cartera de Alice no debe verse afectada por las importaciones de Bob");
+        assertTrue(afterFirst > 0, "el escenario necesita al menos un split para probar algo");
+        assertEquals(afterFirst, splitRepo.findByUserId(bob).size(),
+                "Un split repetido no es otro split: multiplicaría los títulos por el ratio otra vez");
+    }
+
+    @Test
+    @DisplayName("Un split ya existente con ratio distinto se rechaza como conflicto")
+    void splitWithDifferentRatioIsRejected() {
+        buildPortfolio(alice);
+        csvService.importCsv(bob, csvService.export(alice), ImportMode.ADD);
+
+        String changed = new String(csvService.export(alice), StandardCharsets.UTF_8)
+                .replace(";SPLIT;NVIDIA;;;10;", ";SPLIT;NVIDIA;;;2;");
+        CsvImportResult result = csvService.importCsv(
+                bob, changed.getBytes(StandardCharsets.UTF_8), ImportMode.ADD);
+
+        assertFalse(result.ok(), "No debería aceptar el mismo split con ratio distinto");
+        assertTrue(result.errors().stream().anyMatch(e -> e.contains("ratio distinto")),
+                () -> "Debería explicar el conflicto de ratio: " + result.errors());
+        assertEquals(1, splitRepo.findByUserId(bob).size(),
+                "El split original debe mantenerse sin duplicados");
+    }
+
+    @Test
+    @DisplayName("Un ratio contradictorio se avisa antes de preguntar por las operaciones cambiadas")
+    void splitRatioErrorComesBeforeConflicts() {
+        buildPortfolio(alice);
+        csvService.importCsv(bob, csvService.export(alice), ImportMode.ADD);
+
+        String changed = new String(csvService.export(alice), StandardCharsets.UTF_8)
+                .replace(";SPLIT;NVIDIA;;;10;", ";SPLIT;NVIDIA;;;2;")
+                .replace(";Trade Republic;10;1000;2;", ";Trade Republic;10;1100;2;");
+        assertTrue(changed.contains(";1100;"), "el escenario necesita una operación cambiada");
+        CsvImportResult result = csvService.importCsv(
+                bob, changed.getBytes(StandardCharsets.UTF_8), ImportMode.ADD);
+
+        assertFalse(result.needsDecision(),
+                "No tiene sentido hacer decidir sobre un fichero que luego se va a rechazar");
+        assertTrue(result.errors().stream().anyMatch(e -> e.contains("ratio distinto")),
+                () -> "Debería explicar el conflicto de ratio: " + result.errors());
+    }
+
+    @Test
+    @DisplayName("Dos filas del mismo split con ratios distintos se rechazan")
+    void contradictorySplitsInsideTheFileAreRejected() {
+        buildPortfolio(alice);
+        String csv = new String(csvService.export(alice), StandardCharsets.UTF_8);
+        String splitRow = csv.lines().filter(l -> l.contains(";SPLIT;NVIDIA;")).findFirst().orElseThrow();
+        String withTwin = csv + "\n" + splitRow.replace(";SPLIT;NVIDIA;;;10;", ";SPLIT;NVIDIA;;;2;") + "\n";
+
+        CsvImportResult result = csvService.importCsv(
+                bob, withTwin.getBytes(StandardCharsets.UTF_8), ImportMode.ADD);
+
+        assertFalse(result.ok(), "No se puede elegir en silencio uno de los dos ratios");
+        assertTrue(result.errors().stream().anyMatch(e -> e.contains("el fichero trae otro")),
+                () -> "El aviso no debe decir que ya existe, porque no está guardado: " + result.errors());
+        assertEquals(0, splitRepo.findByUserId(bob).size(), "y no debe escribirse nada");
     }
 
     @Test

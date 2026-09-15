@@ -469,6 +469,7 @@ public class OperationController {
         f.setAeatGroup(op.getAeatGroup());
         f.setNotes(op.getNotes());
         f.setTransferId(op.getTransferId());
+        f.setUid(op.getUid());
         return f;
     }
 

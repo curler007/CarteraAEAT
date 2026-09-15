@@ -6,6 +6,7 @@ import lombok.Setter;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.UUID;
 
 @Entity
 @Table(name = "operations",
@@ -74,6 +75,30 @@ public class Operation {
      */
     @Column(name = "transfer_id")
     private String transferId;
+
+    /**
+     * Identidad estable de la operación, la misma en el CSV que en la base de datos.
+     *
+     * <p>Existe para que reimportar una exportación propia no duplique nada. El {@code id} no
+     * sirve para eso: es un autonumérico que cada base reparte a su manera, así que el mismo
+     * hecho económico tendría un id distinto en cada instalación y ninguno al salir en el CSV.
+     *
+     * <p>Se asigna al insertar y no se vuelve a tocar. Sobrevive a una edición —{@code update}
+     * borra la fila y la reinserta, pero el formulario arrastra el uid— porque lo contrario
+     * convertiría cada corrección en una operación nueva a los ojos del importador.
+     *
+     * <p>Nullable en el DDL por lo mismo que {@code user_id}: SQLite no admite añadir una columna
+     * NOT NULL a una tabla con datos. Las filas anteriores las rellena LegacyDataMigration.
+     */
+    @Column(name = "uid", length = 36)
+    private String uid;
+
+    @PrePersist
+    void assignUid() {
+        if (uid == null || uid.isBlank()) {
+            uid = UUID.randomUUID().toString();
+        }
+    }
 
     /**
      * Para ventas: cantidad de acciones aún sin casar con ningún lote de compra.

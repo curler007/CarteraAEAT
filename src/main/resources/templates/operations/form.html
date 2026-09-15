@@ -118,6 +118,11 @@
                              ella el fondo de destino perdería el coste heredado del origen. -->
                         <input type="hidden" th:field="*{transferId}"/>
 
+                        <!-- Identidad estable de la operación. Editar la borra y la reinserta, así
+                             que sin este campo cada corrección la convertiría en una operación
+                             nueva y el CSV exportado dejaría de reconocer lo ya importado. -->
+                        <input type="hidden" th:field="*{uid}"/>
+
                         <div class="d-flex gap-2 justify-content-end">
                             <a href="/operations" class="btn btn-outline-secondary">Cancelar</a>
                             <button type="submit" class="btn btn-success">

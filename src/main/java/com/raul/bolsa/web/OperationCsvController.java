@@ -4,6 +4,7 @@ import com.raul.bolsa.security.CurrentUser;
 import com.raul.bolsa.service.OperationCsvService;
 import com.raul.bolsa.web.dto.CsvImportResult;
 import com.raul.bolsa.web.dto.ImportMode;
+import jakarta.servlet.http.HttpSession;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpHeaders;
@@ -19,7 +20,11 @@ import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 import java.io.IOException;
 import java.time.LocalDate;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
 
 /**
  * Exportación e importación de la cartera del usuario en CSV.
@@ -29,8 +34,17 @@ import java.util.List;
 @Slf4j
 public class OperationCsvController {
 
+    /**
+     * Dónde espera el fichero mientras el usuario decide qué hacer con las operaciones que
+     * vienen cambiadas. No se puede pedir que lo vuelva a elegir: el navegador no rellena un
+     * input de fichero por su cuenta, y hacerle repetir la subida para confirmar sería absurdo.
+     */
+    private static final String PENDING_IMPORTS = "importPendingByToken";
+
     private final OperationCsvService csvService;
     private final CurrentUser currentUser;
+
+    private record PendingImport(byte[] bytes, ImportMode mode) {}
 
     @GetMapping("/operations/export.csv")
     public ResponseEntity<byte[]> export() {
@@ -73,6 +87,7 @@ public class OperationCsvController {
     @PostMapping("/operations/import")
     public String doImport(@RequestParam("file") MultipartFile file,
                            @RequestParam(defaultValue = "ADD") ImportMode mode,
+                           HttpSession session,
                            Model model,
                            RedirectAttributes flash) {
         model.addAttribute("header", OperationCsvService.HEADER);
@@ -82,13 +97,23 @@ public class OperationCsvController {
             return "operations/import";
         }
 
-        CsvImportResult result;
+        byte[] bytes;
         try {
-            result = csvService.importCsv(currentUser.id(), file.getBytes(), mode);
+            bytes = file.getBytes();
         } catch (IOException e) {
             log.warn("No se pudo leer el CSV subido: {}", e.getMessage());
             model.addAttribute("errors", List.of("No se ha podido leer el fichero: " + e.getMessage()));
             return "operations/import";
+        }
+        CsvImportResult result = csvService.importCsv(currentUser.id(), bytes, mode);
+
+        if (result.needsDecision()) {
+            String token = UUID.randomUUID().toString();
+            pendingImports(session).put(token, new PendingImport(bytes, mode));
+            model.addAttribute("conflicts", result.conflicts());
+            model.addAttribute("mode", mode);
+            model.addAttribute("token", token);
+            return "operations/import-conflicts";
         }
 
         if (!result.ok()) {
@@ -97,6 +122,11 @@ public class OperationCsvController {
             return "operations/import";
         }
 
+        return finish(result, flash);
+    }
+
+    /** Cuenta lo que ha entrado y devuelve al listado. Común a la importación y a su confirmación. */
+    private String finish(CsvImportResult result, RedirectAttributes flash) {
         StringBuilder msg = new StringBuilder(String.format(
                 "Importación completada (%s): %d operaciones", result.format(), result.operations()));
         if (result.splits() > 0) msg.append(" y ").append(result.splits()).append(" splits");
@@ -123,5 +153,52 @@ public class OperationCsvController {
         }
         flash.addFlashAttribute("success", msg.toString());
         return "redirect:/operations";
+    }
+
+    /**
+     * Segundo paso de una importación que traía operaciones cambiadas: se repite con las
+     * decisiones tomadas.
+     *
+     * <p>El fichero se reprocesa entero en vez de guardarse lo ya calculado. Cuesta lo mismo y
+     * evita el problema de fondo de partir una escritura en dos: entre la pregunta y la respuesta
+     * la cartera ha podido cambiar —otra pestaña, otra importación—, y aplicar un plan hecho
+     * sobre datos viejos escribiría sobre algo que ya no es lo que se enseñó.
+     *
+     * @param update uid de cada operación que el usuario ha elegido sobrescribir; las demás se
+     *               quedan como están
+     */
+    @PostMapping("/operations/import/resolver")
+    public String resolveConflicts(@RequestParam(name = "update", required = false) Set<String> update,
+                                   @RequestParam("token") String token,
+                                   HttpSession session,
+                                   Model model,
+                                   RedirectAttributes flash) {
+        PendingImport pending = pendingImports(session).remove(token);
+        if (pending == null) {
+            flash.addFlashAttribute("error",
+                    "La importación ha caducado. Vuelve a subir el fichero.");
+            return "redirect:/operations/import";
+        }
+        CsvImportResult result = csvService.importCsv(
+                currentUser.id(), pending.bytes(), pending.mode(), update == null ? Set.of() : update);
+
+        if (!result.ok()) {
+            model.addAttribute("header", OperationCsvService.HEADER);
+            model.addAttribute("errors", result.errors().isEmpty()
+                    ? List.of("El fichero ha cambiado y vuelve a haber decisiones pendientes.")
+                    : result.errors());
+            return "operations/import";
+        }
+        return finish(result, flash);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, PendingImport> pendingImports(HttpSession session) {
+        Map<String, PendingImport> pending = (Map<String, PendingImport>) session.getAttribute(PENDING_IMPORTS);
+        if (pending == null) {
+            pending = new HashMap<>();
+            session.setAttribute(PENDING_IMPORTS, pending);
+        }
+        return pending;
     }
 }

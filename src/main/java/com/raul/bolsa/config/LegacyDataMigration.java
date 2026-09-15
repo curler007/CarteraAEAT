@@ -14,6 +14,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.UUID;
 
 /**
  * Convierte una instalación monousuario en multiusuario sin perder datos.
@@ -25,6 +26,8 @@ import java.util.List;
  *   <li>Si no hay ningún usuario, crea el administrador inicial con las credenciales de
  *       {@code app.security.username} / {@code app.security.password}.</li>
  *   <li>Asigna a ese administrador todas las filas que aún no tienen propietario.</li>
+ *   <li>Pone identidad estable a las operaciones que se crearon antes de que existiera, para
+ *       que salgan en el CSV y reimportarlas no las duplique.</li>
  * </ol>
  */
 @Component
@@ -50,6 +53,27 @@ public class LegacyDataMigration implements ApplicationRunner {
     public void run(ApplicationArguments args) {
         AppUser admin = ensureInitialAdmin();
         adoptOrphanRows(admin);
+        assignMissingUids();
+    }
+
+    /**
+     * Reparte un uid a las operaciones que no lo tienen, que son las creadas antes de que la
+     * columna existiera. Las nuevas lo reciben al insertarse, en {@code Operation.assignUid()}.
+     *
+     * <p>Se generan de uno en uno y en Java en lugar de con una función de SQLite: son unos
+     * cientos de filas una única vez, y así el identificador es el mismo UUID que reparte la
+     * aplicación y no depende de qué funciones traiga compilado el driver.
+     */
+    private void assignMissingUids() {
+        List<Long> pending = jdbc.queryForList(
+                "SELECT id FROM operations WHERE uid IS NULL OR uid = ''", Long.class);
+        if (pending.isEmpty()) return;
+        for (Long id : pending) {
+            jdbc.update("UPDATE operations SET uid = ? WHERE id = ?",
+                    UUID.randomUUID().toString(), id);
+        }
+        log.info("Identidad estable asignada a {} operaciones anteriores a la columna uid",
+                pending.size());
     }
 
     private AppUser ensureInitialAdmin() {
