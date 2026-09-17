@@ -135,14 +135,8 @@ public class OperationController {
         model.addAttribute("unvalued", unvaluedOperations(uid));
         model.addAttribute("missingOrigins", missingOrigins(uid));
 
-        // Recorrido completo de la cartera: cuánto dinero ha entrado desde el principio y cuánto
-        // se ha ganado con él, contando también lo que ya se vendió. La parte latente la suma el
-        // navegador, que es quien tiene las cotizaciones.
-        model.addAttribute("totalInvested",
-                operationRepo.sumTotalByUserIdAndType(uid, OperationType.BUY));
-        model.addAttribute("realizedGain", allSales.stream()
-                .map(SaleRecord::getGainLoss)
-                .reduce(BigDecimal.ZERO, BigDecimal::add));
+        // Flujos de caja para la TIR. El valor de hoy lo cierra el navegador, que es quien tiene
+        // las cotizaciones.
         model.addAttribute("cashFlows", cashFlows(uid));
 
         return "dashboard";
