@@ -101,6 +101,26 @@ class DashboardPageRenderTest {
                     "falta el hueco del periodo " + periodo);
         }
 
+        // Panel de quién mueve cada tarjeta: las cinco tienen que ser pulsables y traer su periodo,
+        // porque es el único dato que le dice al JS contra qué comparar.
+        for (String periodo : new String[]{"global", "today", "week", "month", "year"}) {
+            assertTrue(html.contains("data-period=\"" + periodo + "\""),
+                    "la tarjeta " + periodo + " debe abrir su detalle");
+        }
+        assertEquals(5, html.split("data-period=\"", -1).length - 1,
+                "las cinco tarjetas, y solo ellas, abren el panel");
+        // La Global va en blanco y las de periodo sombreadas: miden cosas distintas y su detalle
+        // también, que en la Global solo hay latente.
+        assertEquals(4, html.split("period-card period-shaded", -1).length - 1,
+                "solo las cuatro de periodo van sombreadas");
+        assertTrue(html.contains("period-card\" data-period=\"global\""),
+                "la Global se queda sin sombreado");
+        for (String hueco : new String[]{"moversPanel", "moversBody", "moversTitle", "moversNote", "moversFoot"}) {
+            assertTrue(html.contains("id=\"" + hueco + "\""), "falta el hueco " + hueco);
+        }
+        assertTrue(html.contains("id=\"moversPanel\"") && html.contains("hidden"),
+                "el panel nace cerrado: se abre al pulsar una tarjeta");
+
         // Resumen de TIR: la global y las de ventana las completa el navegador
         for (String hueco : new String[]{"irr-global", "irr-year5", "irr-year3", "irr-year"}) {
             assertTrue(html.contains("id=\"" + hueco + "\""), "falta el hueco " + hueco);
