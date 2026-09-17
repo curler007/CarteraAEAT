@@ -20,6 +20,12 @@ import java.util.List;
  * @param missing      valores que había aquel día y que no se han podido valorar. Mientras la
  *                     lista no esté vacía el periodo no es publicable: el valor inicial sale corto
  *                     y la variación, inflada
+ * @param positions    el mismo periodo abierto valor a valor, para poder decir quién lo mueve
+ * @param transferDrift lo que el dinero ganó o perdió entre salir de un fondo y entrar en otro:
+ *                     un traspaso tarda días en ejecutarse y en ese hueco el dinero está fuera del
+ *                     mercado. En la variación del periodo ya está incluido —es valor que cambió—
+ *                     pero no es de ningún valor en concreto, así que al repartir por posiciones
+ *                     se queda fuera y hay que sumarlo aparte para volver a la cifra de la tarjeta
  */
 public record PeriodBaseline(
         String period,
@@ -27,5 +33,7 @@ public record PeriodBaseline(
         BigDecimal openingValue,
         BigDecimal boughtAfter,
         BigDecimal soldAfter,
-        List<String> missing
+        List<String> missing,
+        List<PeriodPosition> positions,
+        BigDecimal transferDrift
 ) {}

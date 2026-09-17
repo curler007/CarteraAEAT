@@ -5,6 +5,7 @@ import com.raul.bolsa.repository.AppUserRepository;
 import com.raul.bolsa.security.AppUserPrincipal;
 import com.raul.bolsa.service.PortfolioValuationService;
 import com.raul.bolsa.web.dto.PeriodBaseline;
+import com.raul.bolsa.web.dto.PeriodPosition;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -70,13 +71,21 @@ class PeriodBasisControllerTest {
     @DisplayName("El endpoint devuelve week/month/year con campos numéricos y missing")
     void returnsPeriodBaselinesJsonContract() throws Exception {
         Long otherUserId = TestUsers.create(userRepo, "period-other").getId();
+        List<PeriodPosition> posiciones = List.of(
+                new PeriodPosition("IE00AAA", "FONDO A", new BigDecimal("600.00"), new BigDecimal("0.00"),
+                        new BigDecimal("10.00"), new BigDecimal("0.00"), new BigDecimal("0.00")),
+                new PeriodPosition("IE00BBB", "FONDO B", new BigDecimal("400.50"), new BigDecimal("150.00"),
+                        new BigDecimal("0.00"), new BigDecimal("20.00"), new BigDecimal("0.00")));
         when(valuation.baselines(eq(uid), anyMap())).thenReturn(List.of(
                 new PeriodBaseline("week", "2026-09-03",
-                        new BigDecimal("1000.50"), new BigDecimal("10.00"), new BigDecimal("20.00"), List.of()),
+                        new BigDecimal("1000.50"), new BigDecimal("10.00"), new BigDecimal("20.00"),
+                        List.of(), posiciones, new BigDecimal("-1.25")),
                 new PeriodBaseline("month", "2026-08-10",
-                        new BigDecimal("900.00"), new BigDecimal("30.00"), new BigDecimal("0.00"), List.of("IE00AAA")),
+                        new BigDecimal("900.00"), new BigDecimal("30.00"), new BigDecimal("0.00"),
+                        List.of("IE00AAA"), List.of(), BigDecimal.ZERO),
                 new PeriodBaseline("year", "2025-09-10",
-                        new BigDecimal("700.00"), new BigDecimal("200.00"), new BigDecimal("50.00"), List.of())
+                        new BigDecimal("700.00"), new BigDecimal("200.00"), new BigDecimal("50.00"),
+                        List.of(), posiciones, BigDecimal.ZERO)
         ));
 
         mvc.perform(get("/api/period-basis"))
@@ -89,7 +98,19 @@ class PeriodBasisControllerTest {
                 .andExpect(jsonPath("$[0].boughtAfter").isNumber())
                 .andExpect(jsonPath("$[0].soldAfter").isNumber())
                 .andExpect(jsonPath("$[1].missing[0]").value("IE00AAA"))
-                .andExpect(jsonPath("$[0].at").value("2026-09-03"));
+                .andExpect(jsonPath("$[0].at").value("2026-09-03"))
+                // El reparto por valor viaja con el periodo: es lo que el panel de la tarjeta
+                // necesita para decir quién la mueve, y sin él no hay segunda llamada que lo dé.
+                .andExpect(jsonPath("$[0].positions[0].isin").value("IE00AAA"))
+                .andExpect(jsonPath("$[0].positions[0].ticker").value("FONDO A"))
+                .andExpect(jsonPath("$[0].positions[0].openingValue").isNumber())
+                .andExpect(jsonPath("$[0].positions[0].inflow").isNumber())
+                .andExpect(jsonPath("$[0].positions[1].outflow").isNumber())
+                .andExpect(jsonPath("$[0].transferDrift").value(-1.25))
+                // Con openingSold el panel parte la contribución del valor en lo que se llevó lo
+                // que salió y lo que sigue latente en lo que queda.
+                .andExpect(jsonPath("$[0].positions[1].openingSold").value(150.00))
+                .andExpect(jsonPath("$[0].positions[1].unmatched").isNumber());
 
         verify(valuation).baselines(eq(uid), anyMap());
         verify(valuation, never()).baselines(eq(otherUserId), anyMap());
