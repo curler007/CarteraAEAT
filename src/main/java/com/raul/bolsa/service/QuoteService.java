@@ -225,7 +225,7 @@ public class QuoteService {
         // El precio de hoy y el cierre anterior van los dos al cambio de hoy: en una sesión el
         // euro no se mueve casi, y así la variación diaria refleja el activo sin mezclarle divisa.
         LocalDate today = LocalDate.now();
-        BigDecimal priceEur = fxRates.toEur(BigDecimal.valueOf(raw), currency, today).orElse(null);
+        BigDecimal priceEur = fxRates.toEurCached(BigDecimal.valueOf(raw), currency, today).orElse(null);
         if (priceEur == null) {
             // Sin tipo de cambio se devuelve el precio en su divisa; el frontend solo lo muestra
             log.debug("Sin tipo de cambio {}/EUR del BCE, precio sin convertir: {} {}", currency, raw, symbol);
@@ -233,7 +233,7 @@ public class QuoteService {
                     refs.week(), refs.month(), refs.year(), currency, false));
         }
         BigDecimal prevEur = prevRaw == null ? null
-                : fxRates.toEur(BigDecimal.valueOf(prevRaw), currency, today).orElse(null);
+                : fxRates.toEurCached(BigDecimal.valueOf(prevRaw), currency, today).orElse(null);
 
         // Los cierres de referencia, en cambio, van cada uno al cambio de SU fecha. A un año el
         // euro se mueve mucho, y valorar el punto de partida al cambio de hoy contaría el activo
@@ -353,7 +353,7 @@ public class QuoteService {
          * devolviera "el cambio" invita a multiplicar cuando toca dividir.
          */
         public Optional<BigDecimal> toEurAt(BigDecimal amount, String currency, LocalDate date) {
-            return fxRates.toEur(amount, currency, date);
+            return fxRates.toEurCached(amount, currency, date);
         }
 
         /**
@@ -505,7 +505,7 @@ public class QuoteService {
      */
     private BigDecimal refAt(BigDecimal close, String currency, LocalDate date) {
         if (close == null) return null;
-        return fxRates.toEur(close, currency, date).orElse(null);
+        return fxRates.toEurCached(close, currency, date).orElse(null);
     }
 
     private HttpEntity<Void> httpEntity() {

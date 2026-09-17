@@ -1,7 +1,12 @@
 package com.raul.bolsa.service;
 
+import com.raul.bolsa.domain.FxRate;
+import com.raul.bolsa.repository.FxRateRepository;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
@@ -23,6 +28,9 @@ import java.time.LocalDate;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * Tipos de cambio oficiales del BCE, que es el criterio que admite Hacienda para valorar en euros
@@ -30,8 +38,20 @@ import java.util.Optional;
  *
  * <p>Se descarga de una vez la serie diaria completa de la divisa —desde 1999, unos 400 KB— en vez
  * de pedir fecha a fecha: al importar un extracto hacen falta decenas de fechas distintas, y la
- * serie entera cabe de sobra en memoria. Se guarda hasta el final del día, que es cuando el BCE
- * publica el siguiente dato, sobre las 16:00 CET.
+ * serie entera cabe de sobra en memoria. A partir de ahí solo se piden los días nuevos, con
+ * {@code startPeriod}.
+ *
+ * <p>La serie se guarda en {@link com.raul.bolsa.domain.FxRate}, y la memoria es solo la copia
+ * caliente que se hidrata al arrancar. Eso cambia dos cosas que se notaban: el reinicio ya no
+ * obliga a descargar veintisiete años otra vez, y con el BCE caído se sigue convirtiendo por el
+ * último día guardado.
+ *
+ * <p><b>Ninguna petición web espera al BCE.</b> {@link #toEur} responde con lo que hay en memoria y,
+ * si falta, encarga la descarga a un hilo aparte y devuelve vacío para que la página lo diga. La
+ * descarga dentro de la petición fue lo que tostó el dashboard el 17/09/2026: veinte cotizaciones
+ * en paralelo, cada una con su conexión JDBC retenida, todas encoladas tras un timeout de 30 s
+ * contra un BCE que no respondía, y el pool de conexiones agotado. Importar es la excepción y
+ * tiene su propio método: ver {@link #toEurBlocking}.
  *
  * <p>La fuente es el Data Portal ({@code data-api.ecb.europa.eu}) y no el fichero
  * {@code eurofxref-hist.csv} de la web del BCE: ese está detrás de un certificado emitido por una
@@ -61,15 +81,30 @@ public class EcbFxRateService {
     /** Raíz que el BCE usa y la JVM no trae. Vale hasta 2046. */
     private static final String ROOT_CERT = "/certs/sectigo-public-server-auth-root-e46.pem";
 
-    private final RestTemplate rest;
+    /** Lo que se espera a la red cuando toca esperar. Treinta segundos era un cuelgue. */
+    private static final int READ_TIMEOUT_MS = 5_000;
 
-    /** divisa → (fecha → unidades por euro). */
-    private final Map<String, Map<LocalDate, BigDecimal>> series = new HashMap<>();
+    private final RestTemplate rest;
+    private final FxRateRepository repo;
+
+    /** divisa → (fecha → unidades por euro). Copia caliente de la tabla. */
+    private final Map<String, Map<LocalDate, BigDecimal>> series = new ConcurrentHashMap<>();
 
     /** Día del último intento por divisa, con éxito o sin él: no se reintenta en bucle. */
-    private final Map<String, LocalDate> lastAttempt = new HashMap<>();
+    private final Map<String, LocalDate> lastAttempt = new ConcurrentHashMap<>();
 
-    public EcbFxRateService() {
+    /**
+     * Un solo hilo, en segundo plano y en cola: dos divisas que falten a la vez se descargan una
+     * detrás de otra sin que nadie las espere, y ninguna petición web se bloquea por ellas.
+     */
+    private final ExecutorService refresher = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "fx-refresh");
+        t.setDaemon(true);
+        return t;
+    });
+
+    public EcbFxRateService(FxRateRepository repo) {
+        this.repo = repo;
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory() {
             @Override
             protected void prepareConnection(HttpURLConnection connection, String httpMethod)
@@ -81,7 +116,7 @@ public class EcbFxRateService {
             }
         };
         factory.setConnectTimeout(5_000);
-        factory.setReadTimeout(30_000);
+        factory.setReadTimeout(READ_TIMEOUT_MS);
         this.rest = new RestTemplate(factory);
     }
 
@@ -183,16 +218,57 @@ public class EcbFxRateService {
      *         inventado, porque un coste de adquisición mal convertido no se detecta después
      */
     public Optional<BigDecimal> toEur(BigDecimal amount, String currency, LocalDate date) {
+        return convert(amount, currency, date, true);
+    }
+
+    /**
+     * Igual, pero sin bajar nada: si el tipo no está guardado, devuelve vacío y encarga la
+     * descarga a un hilo aparte.
+     *
+     * <p>Es el camino de las páginas, y en particular el de las cotizaciones, que se piden a razón
+     * de una por posición y en paralelo. Con {@link #toEur} ahí, un BCE que no responde encola
+     * veinte peticiones —cada una con su conexión JDBC retenida— detrás del mismo timeout y agota
+     * el pool: es lo que dejó el dashboard muerto el 17/09/2026. Al importar, en cambio, sí se
+     * espera: un extracto sin convertir se rechaza entero, y ahí unos segundos valen la pena.
+     */
+    public Optional<BigDecimal> toEurCached(BigDecimal amount, String currency, LocalDate date) {
+        return convert(amount, currency, date, false);
+    }
+
+    private Optional<BigDecimal> convert(BigDecimal amount, String currency, LocalDate date,
+                                         boolean waitForDownload) {
         if (amount == null || currency == null) return Optional.empty();
         if (currency.equalsIgnoreCase("EUR")) return Optional.of(amount);
 
-        return rate(currency, date).map(r -> amount.divide(r, SCALE, RoundingMode.HALF_UP));
+        return rate(currency, date, waitForDownload)
+                .map(r -> amount.divide(r, SCALE, RoundingMode.HALF_UP));
     }
 
-    /** Unidades de {@code currency} que compra un euro en esa fecha. */
+    /** Unidades de {@code currency} que compra un euro en esa fecha, sin esperar a la red. */
     public Optional<BigDecimal> rate(String currency, LocalDate date) {
-        Map<LocalDate, BigDecimal> rates = load(currency.toUpperCase());
+        return rate(currency, date, false);
+    }
 
+    private Optional<BigDecimal> rate(String currency, LocalDate date, boolean waitForDownload) {
+        String iso = currency.toUpperCase();
+        Optional<BigDecimal> found = lookup(iso, date);
+        if (found.isPresent()) return found;
+
+        // Puede ser que la divisa no se haya visto nunca, o que la serie se haya quedado corta.
+        // En los dos casos hay que pedirla; lo que cambia es si quien pregunta puede esperar.
+        if (waitForDownload) {
+            // force: si el intento de hoy ya falló, quien importa tiene derecho a reintentar. Con
+            // el BCE recuperado, volver a subir el fichero debe funcionar y no fallar hasta mañana.
+            refresh(iso, true);
+            return lookup(iso, date);
+        }
+        refreshLater(iso);
+        return Optional.empty();
+    }
+
+    /** El tipo vigente en esa fecha según lo que ya está en memoria. */
+    private Optional<BigDecimal> lookup(String currency, LocalDate date) {
+        Map<LocalDate, BigDecimal> rates = series.getOrDefault(currency, Map.of());
         for (int back = 0; back <= MAX_LOOKBACK_DAYS; back++) {
             BigDecimal r = rates.get(date.minusDays(back));
             if (r != null) return Optional.of(r);
@@ -200,26 +276,82 @@ public class EcbFxRateService {
         return Optional.empty();
     }
 
-    private synchronized Map<LocalDate, BigDecimal> load(String currency) {
-        LocalDate today = LocalDate.now();
-        if (today.equals(lastAttempt.get(currency))) {
-            return series.getOrDefault(currency, Map.of());
+    /**
+     * Sube a memoria lo que ya está guardado. Se hace una vez al arrancar, y es lo que permite
+     * responder sin red: la serie de ayer sigue siendo válida para convertir hoy.
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    void hydrateAndRefresh() {
+        hydrate();
+        // Al arrancar se piden los días que falten de lo que ya se conoce, en segundo plano: la
+        // primera visita no tiene por qué pagar la descarga.
+        series.keySet().forEach(this::refreshLater);
+    }
+
+    /** Solo la parte que lee la tabla, sin red: es lo que hace útil el arranque en frío. */
+    void hydrate() {
+        Map<String, Map<LocalDate, BigDecimal>> loaded = new HashMap<>();
+        for (FxRate row : repo.findAllByOrderByCurrencyAscRateDateAsc()) {
+            loaded.computeIfAbsent(row.getCurrency(), k -> new HashMap<>())
+                    .put(row.getRateDate(), row.getRate());
         }
+        series.putAll(loaded);
+        loaded.forEach((currency, rates) ->
+                log.info("Serie de tipos {}/EUR en base de datos: {} días", currency, rates.size()));
+    }
+
+    /**
+     * Los días nuevos de cada divisa conocida. El BCE publica sobre las 16:00 CET, así que a y
+     * media ya está; si el NAS estaba apagado a esa hora, lo coge el arranque siguiente.
+     */
+    @Scheduled(cron = "0 30 16 * * MON-FRI", zone = "Europe/Madrid")
+    void refreshDaily() {
+        series.keySet().forEach(this::refreshLater);
+    }
+
+    /** Encola la descarga sin esperarla, como máximo un intento por divisa y día. */
+    private void refreshLater(String currency) {
+        if (LocalDate.now().equals(lastAttempt.get(currency))) return;
+        refresher.submit(() -> refresh(currency, false));
+    }
+
+    /**
+     * Pide al BCE los días que faltan y los guarda. Solo trae desde el último día conocido, así
+     * que después de la primera vez son cuatro filas y no veintisiete años.
+     */
+    private synchronized void refresh(String currency, boolean force) {
+        LocalDate today = LocalDate.now();
+        if (!force && today.equals(lastAttempt.get(currency))) return;
         lastAttempt.put(currency, today);
 
+        Map<LocalDate, BigDecimal> known = series.getOrDefault(currency, Map.of());
+        LocalDate from = known.keySet().stream().max(LocalDate::compareTo).orElse(null);
         try {
-            String csv = rest.getForObject(String.format(SERIES_URL, currency), String.class);
-            Map<LocalDate, BigDecimal> parsed = parse(csv);
-            if (!parsed.isEmpty()) {
-                series.put(currency, parsed);
-                log.info("Serie de tipos {}/EUR del BCE cargada: {} días", currency, parsed.size());
-            }
+            Map<LocalDate, BigDecimal> parsed = parse(
+                    rest.getForObject(seriesUrl(currency, from), String.class));
+            Map<LocalDate, BigDecimal> nuevos = new HashMap<>(parsed);
+            nuevos.keySet().removeAll(known.keySet());
+            if (nuevos.isEmpty()) return;
+
+            repo.saveAll(nuevos.entrySet().stream()
+                    .map(e -> new FxRate(currency, e.getKey(), e.getValue()))
+                    .toList());
+            Map<LocalDate, BigDecimal> merged = new HashMap<>(known);
+            merged.putAll(nuevos);
+            series.put(currency, merged);
+            log.info("Serie de tipos {}/EUR del BCE: {} días nuevos, {} en total",
+                    currency, nuevos.size(), merged.size());
         } catch (Exception e) {
-            // Con la serie de un día anterior en memoria se sigue trabajando; sin ella, quien
-            // llame recibirá un Optional vacío y podrá avisar en vez de convertir a ciegas.
+            // Con lo guardado se sigue convirtiendo; sin nada, quien llame recibe un Optional
+            // vacío y podrá avisar en vez de convertir a ciegas.
             log.warn("No se ha podido descargar la serie {}/EUR del BCE: {}", currency, e.getMessage());
         }
-        return series.getOrDefault(currency, Map.of());
+    }
+
+    /** La serie entera la primera vez, y desde el último día conocido las siguientes. */
+    static String seriesUrl(String currency, LocalDate from) {
+        String url = String.format(SERIES_URL, currency);
+        return from == null ? url : url + "&startPeriod=" + from;
     }
 
     /** Una fila por día: {@code EXR.D.USD.EUR.SP00.A,D,USD,EUR,SP00,A,1999-01-04,1.1789}. */
