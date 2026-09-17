@@ -13,6 +13,14 @@
     }
     #treemap .tm-name { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     #treemap .tm-val  { font-size: .72rem; opacity: .92; white-space: nowrap; }
+
+    /* Cada cifra lleva delante su "·", colgado en un margen negativo. El que cae a principio de
+       línea (el primero, o la segunda pareja cuando baja) queda fuera y lo recorta el overflow. */
+    .irr-summary { overflow: hidden; }
+    .irr-summary > .irr-row { display: flex; flex-wrap: wrap; margin-left: -1.6em; }
+    .irr-pair { white-space: nowrap; }
+    .irr-item:empty { display: none; }
+    .irr-item::before { content: "·"; display: inline-block; width: 1.6em; text-align: center; }
 </style>
 
 <div class="container-fluid px-4">
@@ -94,23 +102,21 @@
     </div>
 
     <!--
-      Recorrido completo de la cartera, deliberadamente discreto: el latente de arriba es lo que
-      se mira a diario, y esto es el contexto de fondo. Sin color ni negrita, para no competir.
+      TIR de la cartera, deliberadamente discreta: el latente de arriba es lo que se mira a
+      diario, y esto es el contexto de fondo. Sin color, para no competir; solo la global en
+      negrita. Va por parejas (global y 5 años, 3 años y último año) para que, si no cabe, parta
+      en dos líneas por ahí y no a mitad de una cifra.
     -->
     <div class="border rounded px-3 py-2 mb-3 small text-muted"
          th:unless="${#lists.isEmpty(portfolio)}">
-        <span class="text-uppercase me-3">Desde el principio</span>
-        Comprado
-        <span class="text-body" th:text="${#numbers.formatDecimal(totalInvested, 1, 'POINT', 2, 'COMMA') + ' €'}"></span>
-        <span class="mx-2">·</span>
-        Ganado
-        <span class="text-body" id="lifetime-gain">…</span><span id="lifetime-pct"></span><span
-              id="irr-flag" class="ms-1" data-bs-toggle="tooltip" hidden><i
-              class="bi bi-exclamation-triangle-fill text-warning"></i></span>
-        <span id="lifetime-breakdown"></span>
-        <div class="mt-1"><span id="irr-windows"></span><span
-              id="irr-windows-flag" class="ms-1" data-bs-toggle="tooltip" hidden><i
-              class="bi bi-exclamation-triangle-fill text-warning"></i></span></div>
+        <div class="irr-summary"><div class="irr-row">
+            <span class="irr-pair"><span class="irr-item"><b class="text-body" id="irr-global">TIR …</b></span><span
+                  class="irr-item" id="irr-year5"></span></span><span
+                  class="irr-pair"><span class="irr-item" id="irr-year3"></span><span
+                  class="irr-item" id="irr-year"></span><span
+                  id="irr-flag" class="ms-1" data-bs-toggle="tooltip" hidden><i
+                  class="bi bi-exclamation-triangle-fill text-warning"></i></span></span>
+        </div></div>
     </div>
 
     <div class="d-flex justify-content-end mb-2" th:unless="${#lists.isEmpty(portfolio)}">
@@ -322,15 +328,9 @@
         .then(resp => resp.ok ? resp.json() : null)
         .catch(() => null);
 
-    // Ganancia realizada en ventas pasadas. La latente se le suma cuando llegan las cotizaciones.
-    const realizedGain     = [[${realizedGain}]];
     const cashFlows        = [[${cashFlows}]];
-    const lifetimeGain     = document.getElementById('lifetime-gain');
-    const lifetimePct      = document.getElementById('lifetime-pct');
+    const irrGlobal        = document.getElementById('irr-global');
     const irrFlag          = document.getElementById('irr-flag');
-    const lifetimeBreakdown = document.getElementById('lifetime-breakdown');
-    const irrWindowsText   = document.getElementById('irr-windows');
-    const irrWindowsFlag   = document.getElementById('irr-windows-flag');
 
     const globalValue    = document.getElementById('global-value');
     const globalDelta    = document.getElementById('global-delta');
@@ -353,13 +353,9 @@
         globalDelta.textContent = '(' + signedEur(latentTotal) + '  ' + signedPct(pct) + ')';
         globalDelta.style.color = c;
         renderUnvalued();
-        renderLifetime();
+        renderIrr();
     }
 
-    /**
-     * Lo ganado desde el principio: lo que ya se materializó en ventas más lo que sigue en el
-     * aire. Se pinta sin color a propósito; el semáforo es cosa de la tarjeta Global.
-     */
     /**
      * TIR anualizada de una serie de flujos con fecha (XIRR): el tipo al que habría que descontar
      * todo lo aportado y lo recuperado para que sumase cero con el valor de hoy.
@@ -391,25 +387,6 @@
         const flows = cashFlows.map(f => ({ t: years(new Date(f.date).getTime()), a: f.amount }));
         flows.push({ t: years(Date.now()), a: currentValue });
         return flows;
-    }
-
-    function renderLifetime() {
-        if (!lifetimeGain) return;
-        // Sin ninguna cotización resuelta, la parte latente no es cero: es desconocida, y sumarla
-        // como cero daría por bueno un total que no lo es.
-        if (allSettled && valuedCost <= 0) {
-            lifetimeGain.textContent = '—';
-            lifetimePct.textContent = '';
-            irrFlag.hidden = true;
-            lifetimeBreakdown.textContent = '(' + signedEur(realizedGain)
-                + ' realizado · latente sin valorar)';
-            return;
-        }
-        const gain = realizedGain + latentTotal;
-        lifetimeGain.textContent = signedEur(gain);
-        lifetimeBreakdown.textContent = '(' + signedEur(realizedGain) + ' realizado · '
-            + signedEur(latentTotal) + ' latente)';
-        renderIrr();
     }
 
     /**
@@ -449,12 +426,14 @@
     }
 
     function renderIrr() {
-        const flows = flowsWithToday(totalCost + latentTotal);
+        if (!irrGlobal) return;
+        // Sin ninguna cotización resuelta, el valor de hoy no es el coste: es desconocido, y una
+        // TIR cerrada con él daría por buena una cifra que no lo es.
+        const flows = !(allSettled && valuedCost <= 0) && flowsWithToday(totalCost + latentTotal);
         const rate = flows && xirr(flows);
-        if (rate == null) { lifetimePct.textContent = ''; irrFlag.hidden = true; return; }
-
-        lifetimePct.textContent = '  ·  TIR ' + signedPct(rate * 100) + ' anual';
-        flagIrr(irrFlag, irrBiasNote());
+        irrGlobal.textContent = 'TIR ' + (rate == null ? '—' : signedPct(rate * 100));
+        // El aviso vale para todas las cifras de la línea: todas cierran con el valor de hoy.
+        flagIrr(irrFlag, rate == null ? null : irrBiasNote());
     }
 
     /**
@@ -502,13 +481,12 @@
      * inicial saldría corto y la variación inflada, y un porcentaje inflado con estrellita se lee
      * igual de bien que uno bueno.
      */
-    // "3 años +15,69 %" se lee como si fuera lo ganado en tres años, y son 54,8 %: la cifra es
-    // por año. La etiqueta lo dice entera, aunque repita la palabra, porque el malentendido vale
-    // un factor de tres y medio.
+    // Todas las cifras son TIR anualizadas, también las de 3 y 5 años: la etiqueta "TIR" ya lo
+    // dice, y así la línea se queda corta.
     const VENTANAS = [
-        { period: 'year',  etiqueta: 'último año'     },
-        { period: 'year3', etiqueta: 'últimos 3 años' },
-        { period: 'year5', etiqueta: 'últimos 5 años' }
+        { period: 'year5', etiqueta: 'TIR 5 años'     },
+        { period: 'year3', etiqueta: 'TIR 3 años'     },
+        { period: 'year',  etiqueta: 'TIR último año' }
     ];
 
     /**
@@ -538,26 +516,18 @@
      * siempre, por bien que lo esté haciendo ahora.
      */
     function renderIrrWindows(baselines) {
-        if (!irrWindowsText) return;
-        // Sin respuesta usable la línea desaparece: es lo honesto, porque una TIR calculada sobre
-        // un valor inicial que no tenemos no es una aproximación, es un número inventado.
-        if (!Array.isArray(baselines)) {
-            irrWindowsText.textContent = '';
-            flagIrr(irrWindowsFlag, null);
-            return;
-        }
         const valorHoy = totalCost + latentTotal;
-        const porPeriodo = new Map(baselines.map(b => [b.period, b]));
-        const partes = VENTANAS.map(v => {
+        const porPeriodo = new Map((Array.isArray(baselines) ? baselines : []).map(b => [b.period, b]));
+        VENTANAS.forEach(v => {
+            const el = document.getElementById('irr-' + v.period);
+            if (!el) return;
+            // Sin respuesta usable la cifra desaparece: es lo honesto, porque una TIR calculada
+            // sobre un valor inicial que no tenemos no es una aproximación, es un número inventado.
             const b = porPeriodo.get(v.period);
-            if (!b || !Array.isArray(b.missing)) return null;
+            if (!b || !Array.isArray(b.missing)) { el.textContent = ''; return; }
             const rate = irrForWindow(b, valorHoy);
-            return v.etiqueta + ': ' + (rate == null ? '—' : signedPct(rate * 100) + ' anual');
-        }).filter(Boolean);
-        irrWindowsText.textContent = partes.length ? 'TIR · ' + partes.join('  ·  ') : '';
-        // El mismo sesgo que la global, por el mismo motivo: todas cierran con el valor de hoy.
-        // Sin este aviso las tres salían con apariencia de exactas.
-        flagIrr(irrWindowsFlag, partes.length ? irrBiasNote() : null);
+            el.textContent = v.etiqueta + ': ' + (rate == null ? '—' : signedPct(rate * 100));
+        });
     }
 
     function renderBaselines(baselines) {

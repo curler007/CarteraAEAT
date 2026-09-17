@@ -101,16 +101,11 @@ class DashboardPageRenderTest {
                     "falta el hueco del periodo " + periodo);
         }
 
-        // Recorrido completo: lo invertido lo pinta Thymeleaf, lo ganado lo completa el navegador
-        assertTrue(html.contains("Desde el principio"), "falta el resumen de toda la vida");
-        assertTrue(html.contains("Comprado"), "falta la etiqueta de lo comprado");
-        assertTrue(html.contains("1.500,00 €"), "lo comprado no suma las dos compras");
-        assertTrue(html.contains("id=\"lifetime-gain\""), "falta el hueco de lo ganado");
-        assertTrue(html.contains("id=\"lifetime-pct\""), "falta el hueco del porcentaje");
+        // Resumen de TIR: la global y las de ventana las completa el navegador
+        for (String hueco : new String[]{"irr-global", "irr-year5", "irr-year3", "irr-year"}) {
+            assertTrue(html.contains("id=\"" + hueco + "\""), "falta el hueco " + hueco);
+        }
         assertTrue(html.contains("id=\"irr-flag\""), "falta la marca de TIR aproximada");
-        assertTrue(html.contains("id=\"irr-windows\""), "falta el hueco de las TIR por ventana");
-        assertTrue(html.contains("id=\"irr-windows-flag\""),
-                "las TIR por ventana necesitan su propio aviso: heredan el mismo sesgo que la global");
 
         // Los flujos de caja de la TIR viajan serializados a JSON. Si el inlining los escupiera
         // como un toString() de Java, el navegador no podría leerlos y la TIR no saldría.
