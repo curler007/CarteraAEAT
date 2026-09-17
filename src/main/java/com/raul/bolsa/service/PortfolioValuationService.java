@@ -114,19 +114,35 @@ public class PortfolioValuationService {
                                            Map<String, BigDecimal> opening,
                                            Map<String, BigDecimal> heldAt) {
         Map<String, PeriodFlow> flows = flowsAfter(operations, splits, at, today);
+        // El nombre sale de todas las operaciones del valor y no solo de las del periodo: en una
+        // semana casi ninguna posición tiene movimientos, y sin esto el desglose enseñaba el ISIN
+        // en la columna del nombre.
+        Map<String, String> names = tickersByIsin(operations);
         Map<String, PeriodPosition> out = new LinkedHashMap<>();
 
-        opening.forEach((isin, eur) -> {
-            PeriodFlow flow = flows.get(isin);
-            out.put(isin, position(isin, flow != null ? flow.ticker() : isin, eur,
-                    soldShareOf(eur, heldAt.get(isin), flow == null ? BigDecimal.ZERO : flow.outQty()),
-                    flow));
-        });
+        opening.forEach((isin, eur) -> out.put(isin, position(isin, names.getOrDefault(isin, isin), eur,
+                soldShareOf(eur, heldAt.get(isin),
+                        flows.containsKey(isin) ? flows.get(isin).outQty() : BigDecimal.ZERO),
+                flows.get(isin))));
         // Los que no se tenían aquel día pero recibieron dinero después: una compra nueva, o el
         // fondo de destino de un traspaso. Su valor inicial es cero, no "falta el dato".
         flows.forEach((isin, flow) -> out.computeIfAbsent(isin, k ->
-                position(isin, flow.ticker(), BigDecimal.ZERO, BigDecimal.ZERO, flow)));
+                position(isin, names.getOrDefault(isin, flow.ticker()),
+                        BigDecimal.ZERO, BigDecimal.ZERO, flow)));
         return List.copyOf(out.values());
+    }
+
+    /**
+     * Nombre con el que enseñar cada valor, por ISIN.
+     *
+     * <p>Gana el de la operación más reciente: un fondo que se renombró se lleva el nombre nuevo,
+     * que es el que el usuario reconoce, y no el que tuviera la primera compra.
+     */
+    static Map<String, String> tickersByIsin(List<Operation> operations) {
+        return operations.stream()
+                .sorted(Comparator.comparing(Operation::getDate))
+                .collect(Collectors.toMap(Operation::getAssetName, Operation::getTicker,
+                        (older, newer) -> newer, LinkedHashMap::new));
     }
 
     private PeriodPosition position(String isin, String ticker, BigDecimal opening,
