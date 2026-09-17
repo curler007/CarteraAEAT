@@ -34,6 +34,13 @@
 
     /* Barra proporcional a la contribución, para ver el reparto sin leer las cifras. */
     .mover-bar { height: .5rem; border-radius: .25rem; min-width: 2px; }
+
+    /* Ruedita de "el dato aún no ha llegado". Va solo donde la espera es larga —las tarjetas
+       esperan a todas las cotizaciones y encima al reconstruido— y no en las celdas de la tabla,
+       que se rellenan una a una: cien ruedas girando serían ruido y repintado para nada.
+       Cada hueco que la enseña acaba sustituyéndola por su valor o por un "—", incluso si la
+       llamada falla: una ruedita eterna miente más que los tres puntos que había antes. */
+    .loading-spin { width: .85rem; height: .85rem; border-width: .15em; vertical-align: middle; }
 </style>
 
 <div class="container-fluid px-4">
@@ -66,9 +73,9 @@
                     <div class="fs-4 fw-bold">
                         <span th:text="${#numbers.formatDecimal(totalCost, 1, 'POINT', 2, 'COMMA') + ' €'}"></span>
                         <span class="text-muted mx-2">→</span>
-                        <span id="global-value">…</span>
+                        <span id="global-value"><span class="spinner-border spinner-border-sm text-secondary loading-spin" role="status" aria-label="Cargando"></span></span>
                     </div>
-                    <div class="small fw-semibold" id="global-delta">…</div>
+                    <div class="small fw-semibold" id="global-delta"><span class="spinner-border spinner-border-sm text-secondary loading-spin" role="status" aria-label="Cargando"></span></div>
                     <div class="small text-muted" id="global-unvalued"></div>
                 </div>
             </div>
@@ -80,7 +87,7 @@
                          role="button" tabindex="0" aria-expanded="false" aria-controls="moversPanel">
                         <div class="card-body py-3">
                             <div class="text-muted small text-uppercase">Hoy<i class="bi bi-chevron-down ms-1 period-caret"></i></div>
-                            <div class="fs-6 fw-bold" id="today-eur">…</div>
+                            <div class="fs-6 fw-bold" id="today-eur"><span class="spinner-border spinner-border-sm text-secondary loading-spin" role="status" aria-label="Cargando"></span></div>
                             <div class="small fw-semibold" id="today-pct">…</div>
                         </div>
                     </div>
@@ -90,7 +97,7 @@
                          role="button" tabindex="0" aria-expanded="false" aria-controls="moversPanel">
                         <div class="card-body py-3">
                             <div class="text-muted small text-uppercase">1 semana<i class="bi bi-chevron-down ms-1 period-caret"></i></div>
-                            <div class="fs-6 fw-bold" id="week-eur">…</div>
+                            <div class="fs-6 fw-bold" id="week-eur"><span class="spinner-border spinner-border-sm text-secondary loading-spin" role="status" aria-label="Cargando"></span></div>
                             <div class="small fw-semibold" id="week-pct">…</div>
                         </div>
                     </div>
@@ -100,7 +107,7 @@
                          role="button" tabindex="0" aria-expanded="false" aria-controls="moversPanel">
                         <div class="card-body py-3">
                             <div class="text-muted small text-uppercase">1 mes<i class="bi bi-chevron-down ms-1 period-caret"></i></div>
-                            <div class="fs-6 fw-bold" id="month-eur">…</div>
+                            <div class="fs-6 fw-bold" id="month-eur"><span class="spinner-border spinner-border-sm text-secondary loading-spin" role="status" aria-label="Cargando"></span></div>
                             <div class="small fw-semibold" id="month-pct">…</div>
                         </div>
                     </div>
@@ -110,7 +117,7 @@
                          role="button" tabindex="0" aria-expanded="false" aria-controls="moversPanel">
                         <div class="card-body py-3">
                             <div class="text-muted small text-uppercase">1 año<i class="bi bi-chevron-down ms-1 period-caret"></i></div>
-                            <div class="fs-6 fw-bold" id="year-eur">…</div>
+                            <div class="fs-6 fw-bold" id="year-eur"><span class="spinner-border spinner-border-sm text-secondary loading-spin" role="status" aria-label="Cargando"></span></div>
                             <div class="small fw-semibold" id="year-pct">…</div>
                         </div>
                     </div>
@@ -158,7 +165,7 @@
     <div class="border rounded px-3 py-2 mb-3 small text-muted"
          th:unless="${#lists.isEmpty(portfolio)}">
         <div class="irr-summary"><div class="irr-row">
-            <span class="irr-pair"><span class="irr-item"><b class="text-body" id="irr-global">TIR …</b></span><span
+            <span class="irr-pair"><span class="irr-item"><b class="text-body" id="irr-global">TIR <span class="spinner-border spinner-border-sm text-secondary loading-spin" role="status" aria-label="Cargando"></span></b></span><span
                   class="irr-item" id="irr-year5"></span></span><span
                   class="irr-pair"><span class="irr-item" id="irr-year3"></span><span
                   class="irr-item" id="irr-year"></span><span
@@ -220,7 +227,7 @@
         </div>
         <div class="card-body">
             <div id="treemap" style="position:relative;width:100%;height:440px;">
-                <div class="text-muted small" id="treemapLoading">Cargando cotizaciones…</div>
+                <div class="text-muted small" id="treemapLoading"><span class="spinner-border spinner-border-sm text-secondary loading-spin" role="status" aria-label="Cargando"></span> <span>Cargando cotizaciones…</span></div>
             </div>
         </div>
     </div>
@@ -728,16 +735,21 @@
         moversBody.innerHTML = '';
 
         // Los mismos motivos por los que la tarjeta se calla: sin cotizaciones no hay reparto, y
-        // si falta el precio de algo que había aquel día el periodo entero es impublicable.
+        // si falta el precio de algo que había aquel día el periodo entero es impublicable. Los dos
+        // primeros son esperas y llevan ruedita; los otros dos son finales y no.
         let excusa = null;
-        if (!allSettled) excusa = 'Cargando cotizaciones…';
-        else if (esVentana(period) && !baselinesLoaded) excusa = 'Reconstruyendo la cartera de ' + info.desde + '…';
+        let esperando = false;
+        if (!allSettled) { excusa = 'Cargando cotizaciones…'; esperando = true; }
+        else if (esVentana(period) && !baselinesLoaded) {
+            excusa = 'Reconstruyendo la cartera de ' + info.desde + '…';
+            esperando = true;
+        }
         else if (esVentana(period) && !b) excusa = 'No se ha podido reconstruir la cartera de ' + info.desde + '.';
         else if (esVentana(period) && b.missing.length > 0)
             excusa = 'Falta el precio de ' + b.missing.join(', ') + ' el ' + b.at
                    + ': con un valor inicial corto, el reparto engañaría.';
         if (excusa) {
-            moversNote.textContent = excusa;
+            pintarNota(excusa, esperando);
             moversFoot.textContent = '';
             return;
         }
@@ -764,14 +776,30 @@
 
         // La Global mide el recorrido entero contra el coste, así que ahí solo hay latente: lo que
         // se vendió en su día ya no está en cartera y no entra en la cifra de esa tarjeta.
-        moversNote.textContent = period === 'global'
+        pintarNota(period === 'global'
             ? 'Desglose del latente'
             : esVentana(period)
                 ? 'Desglose desde ' + info.desde + ' (' + enDiaMesAnio(b.at) + ')'
-                : 'Desglose desde ' + info.desde;
+                : 'Desglose desde ' + info.desde, false);
         // Sin línea de suma: el reparto cuadra con la tarjeta por construcción y repetir la cifra
         // que está justo encima solo ocupa sitio. Lo que sí hay que decir es lo que se queda fuera.
         moversFoot.textContent = period === 'global' ? avisoSinCotizacion().trim() : '';
+    }
+
+    /** Una ruedita de "esto todavía no ha llegado", igual que las de las tarjetas. */
+    function ruedita(clases) {
+        const s = document.createElement('span');
+        s.className = 'spinner-border spinner-border-sm text-secondary loading-spin ' + (clases || '');
+        s.setAttribute('role', 'status');
+        s.setAttribute('aria-label', 'Cargando');
+        return s;
+    }
+
+    /** La nota del panel, con ruedita solo si lo que falta es que llegue una llamada. */
+    function pintarNota(texto, esperando) {
+        moversNote.textContent = '';
+        if (esperando) moversNote.appendChild(ruedita('me-2'));
+        moversNote.appendChild(document.createTextNode(texto));
     }
 
     /** La fecha del reconstruido como se lee aquí, no en ISO. */
@@ -985,7 +1013,13 @@
 
         let totalValue = 0;
         rowCurrentValue.forEach(v => { totalValue += v; });
-        if (totalValue <= 0) return;
+        if (totalValue <= 0) {
+            // Sin una sola cotización resuelta no hay nada que dibujar, y el aviso de carga tiene
+            // que decirlo: dejarlo girando sería prometer un dibujo que no va a llegar.
+            const cargando = document.getElementById('treemapLoading');
+            if (cargando) cargando.textContent = 'Sin cotizaciones: no hay distribución que dibujar.';
+            return;
+        }
         rowCurrentValue.forEach((value, row) => {
             const cell = row.querySelector('.cell-pct-value');
             const pct  = value / totalValue * 100;
