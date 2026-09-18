@@ -33,7 +33,15 @@
     .period-card.open .period-caret { transform: rotate(180deg); }
 
     /* Barra proporcional a la contribución, para ver el reparto sin leer las cifras. */
-    .mover-bar { height: .5rem; border-radius: .25rem; min-width: 2px; }
+    .mover-bar { height: .5rem; border-radius: .25rem; min-width: 2px; flex: 0 0 auto; }
+
+    /* Eje con el cero en medio: lo que resta crece hacia la izquierda y lo que suma hacia la
+       derecha, así el signo se lee de un vistazo sin llegar a la cifra. Cada mitad mide lo mismo,
+       de modo que el mayor movimiento del periodo llena su lado entero. */
+    .mover-axis { display: flex; align-items: center; }
+    .mover-axis > div { flex: 1 1 0; display: flex; min-width: 0; }
+    .mover-axis > .mover-neg { justify-content: flex-end; }
+    .mover-axis > .mover-pos { border-left: 1px solid #ced4da; }
 
     /* Ruedita de "el dato aún no ha llegado". Va solo donde la espera es larga —las tarjetas
        esperan a todas las cotizaciones y encima al reconstruido— y no en las celdas de la tabla,
@@ -707,17 +715,25 @@
         const hoyPorIsin = valorHoyPorIsin();
         return (b.positions || []).map(p => {
             const hoy = hoyPorIsin.get(p.isin) || 0;
+            // Estar en cartera es tener fila, no valer más que cero: una posición sin cotización
+            // se cuenta a su coste, y hay compras que entraron sin coste —las entregas gratuitas
+            // de Trade Republic y los canjes—, así que valen cero estando vivas.
+            const enCartera = hoyPorIsin.has(p.isin);
             const euros = hoy + p.outflow - p.openingValue - p.inflow;
             const base = p.openingValue + p.inflow;
             // Las dos mitades de esa contribución: lo que se llevó lo que salió del valor y lo que
             // sigue flotando en lo que queda dentro. Suman la contribución, ni más ni menos.
             // Lo aparecido sin compra detrás se va con la salida que lo destapó: no es dinero que
             // entrara de verdad, y dejarlo en la mitad latente inventaría una pérdida.
-            const vendido = p.outflow - p.openingSold - p.unmatched;
-            const latente = hoy - (p.openingValue - p.openingSold) - (p.inflow - p.unmatched);
+            // Si del valor no queda nada hoy se fue todo lo que había, sin proporciones: el
+            // reparto del valor inicial que calcula el servidor solo hace falta mientras la
+            // posición sigue viva.
+            const salido = enCartera ? p.openingSold : p.openingValue;
+            const vendido = p.outflow - salido - p.unmatched;
+            const latente = hoy - (p.openingValue - salido) - (p.inflow - p.unmatched);
             return { name: p.ticker, isin: p.isin, euros: euros,
                      pct: base > 0 ? euros / base * 100 : null,
-                     fuera: hoy === 0, vendido: vendido, latente: latente };
+                     fuera: !enCartera, vendido: vendido, latente: latente };
         });
     }
 
@@ -760,15 +776,18 @@
             .filter(f => Math.abs(f.euros) >= 0.005)
             .sort((a, b2) => Math.abs(b2.euros) - Math.abs(a.euros));
 
-        // La barra mide contra el mayor movimiento, no contra la suma: con signos mezclados la
-        // suma puede quedar casi en cero y todas las barras saldrían enormes.
-        const mayor = filas.reduce((max, f) => Math.max(max, Math.abs(f.euros)), 0);
-        filas.forEach(f => pintarFila(f.name, f.isin + (f.fuera ? ' · ya no está en cartera' : ''),
-                                      f.euros, f.pct, mayor, f));
-
         // Lo que el dinero hizo mientras viajaba de un fondo a otro no es de ningún valor, pero
         // está dentro de la cifra de la tarjeta. Sin esta línea el reparto no sumaría.
         const drift = esVentana(period) ? (b.transferDrift || 0) : 0;
+
+        // La barra mide contra el mayor movimiento, no contra la suma: con signos mezclados la
+        // suma puede quedar casi en cero y todas las barras saldrían enormes. Los traspasos
+        // entran en esa cuenta: cuando son el movimiento más grande, medir contra otro dejaba su
+        // barra por encima del 100 % y desbordada hacia la derecha.
+        const mayor = Math.max(
+            filas.reduce((max, f) => Math.max(max, Math.abs(f.euros)), 0), Math.abs(drift));
+        filas.forEach(f => pintarFila(f.name, f.isin + (f.fuera ? ' · ya no está en cartera' : ''),
+                                      f.euros, f.pct, mayor, f));
         if (Math.abs(drift) >= 0.005) {
             pintarFila('Traspasos en tránsito', 'días fuera de mercado entre la salida y la entrada',
                        drift, null, mayor);
@@ -822,13 +841,18 @@
     function pintarFila(nombre, detalle, euros, pct, mayor, reparto) {
         const tr = document.createElement('tr');
         const c = euros >= 0 ? GREEN : RED;
-        const ancho = mayor > 0 ? Math.abs(euros) / mayor * 100 : 0;
+        const ancho = mayor > 0 ? Math.min(100, Math.abs(euros) / mayor * 100) : 0;
+        const barra = '<div class="mover-bar" style="width:' + ancho.toFixed(1)
+                    + '%;background:' + c + '"></div>';
         tr.innerHTML =
             '<td><strong></strong> <span class="text-muted small"></span>' +
             '<div class="small mt-1 mover-split"></div></td>' +
             '<td class="text-end fw-semibold" style="color:' + c + '">' + signedEur(euros) + '</td>' +
             '<td class="text-end" style="color:' + c + '">' + (pct == null ? '—' : signedPct(pct)) + '</td>' +
-            '<td><div class="mover-bar" style="width:' + ancho.toFixed(1) + '%;background:' + c + '"></div></td>';
+            '<td><div class="mover-axis">' +
+                '<div class="mover-neg">' + (euros < 0 ? barra : '') + '</div>' +
+                '<div class="mover-pos">' + (euros >= 0 ? barra : '') + '</div>' +
+            '</div></td>';
         // El nombre y el ISIN salen de datos del usuario, así que se asignan como texto y no como
         // HTML: no hay nada que escapar si nunca se interpreta.
         tr.querySelector('strong').textContent = nombre;
