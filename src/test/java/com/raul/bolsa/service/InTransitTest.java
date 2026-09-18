@@ -27,14 +27,25 @@ class InTransitTest {
 
     private static final LocalDate CORTE = LocalDate.parse("2026-08-18");
 
-    /** La tanda real que lo destapó: seis fondos salen antes del corte y aterrizan después. */
+    /**
+     * La tanda INV:2026-08-13 tal cual está en la base: siete salidas entre el 13 y el 18 de
+     * agosto, una entrada que ya había llegado el propio día del corte y tres posteriores. Importa
+     * que esté entera, porque lo que se mide es la resta —lo salido menos lo ya llegado— y con
+     * todas las entradas después del corte esa resta no se ejercita.
+     */
     private static List<Operation> tandaReal() {
         return List.of(
                 op(OperationType.TRASPASO_OUT, "2026-08-13", "FRONTIER", "223.31", "T1"),
                 op(OperationType.TRASPASO_OUT, "2026-08-14", "EUROPE", "1023.61", "T1"),
+                op(OperationType.TRASPASO_OUT, "2026-08-14", "US500", "1172.37", "T1"),
                 op(OperationType.TRASPASO_OUT, "2026-08-17", "EM", "711.82", "T1"),
+                op(OperationType.TRASPASO_OUT, "2026-08-17", "REALSTATE", "184.28", "T1"),
+                op(OperationType.TRASPASO_OUT, "2026-08-17", "SMALLCAP", "221.22", "T1"),
+                op(OperationType.TRASPASO_OUT, "2026-08-18", "JAPAN", "190.76", "T1"),
+                op(OperationType.TRASPASO_IN, "2026-08-18", "MONETARIO", "2195.98", "T1"),
                 op(OperationType.TRASPASO_IN, "2026-08-19", "MONETARIO", "1156.35", "T1"),
-                op(OperationType.TRASPASO_IN, "2026-08-20", "MONETARIO", "802.39", "T1"));
+                op(OperationType.TRASPASO_IN, "2026-08-20", "MONETARIO", "184.28", "T1"),
+                op(OperationType.TRASPASO_IN, "2026-08-21", "MONETARIO", "190.76", "T1"));
     }
 
     @Test
@@ -44,8 +55,22 @@ class InTransitTest {
                 PortfolioValuationService.inTransitAt(tandaReal(), CORTE);
 
         assertEquals(1, enTransito.size(), "solo el destino recibe: " + enTransito);
-        assertEquals(0, new BigDecimal("1958.74").compareTo(enTransito.get("MONETARIO")),
-                "los 1.958,74 € que salieron antes del corte estaban en el aire ese día");
+        // 3.727,37 salidos hasta el corte menos 2.195,98 ya llegados ese mismo día.
+        assertEquals(0, new BigDecimal("1531.39").compareTo(enTransito.get("MONETARIO")),
+                "es el importe que la tarjeta de 1 mes se apuntaba como revalorización");
+    }
+
+    @Test
+    @DisplayName("Lo ya llegado antes del corte no vuelve a contarse")
+    void whatHadAlreadyArrivedIsNotCountedTwice() {
+        // El mismo día del corte había llegado una entrada de 2.195,98 €: ese dinero ya estaba en
+        // el monetario y lo valora su cotización, así que contarlo otra vez lo duplicaría.
+        BigDecimal enElAire = PortfolioValuationService.inTransitAt(tandaReal(), CORTE)
+                .get("MONETARIO");
+        BigDecimal salido = new BigDecimal("3727.37");
+
+        assertEquals(0, salido.subtract(new BigDecimal("2195.98")).compareTo(enElAire),
+                "en el aire quedaba lo salido menos lo ya aterrizado");
     }
 
     @Test

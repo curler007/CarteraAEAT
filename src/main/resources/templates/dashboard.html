@@ -715,6 +715,10 @@
         const hoyPorIsin = valorHoyPorIsin();
         return (b.positions || []).map(p => {
             const hoy = hoyPorIsin.get(p.isin) || 0;
+            // Estar en cartera es tener fila, no valer más que cero: una posición sin cotización
+            // se cuenta a su coste, y hay compras que entraron sin coste —las entregas gratuitas
+            // de Trade Republic y los canjes—, así que valen cero estando vivas.
+            const enCartera = hoyPorIsin.has(p.isin);
             const euros = hoy + p.outflow - p.openingValue - p.inflow;
             const base = p.openingValue + p.inflow;
             // Las dos mitades de esa contribución: lo que se llevó lo que salió del valor y lo que
@@ -724,12 +728,12 @@
             // Si del valor no queda nada hoy se fue todo lo que había, sin proporciones: el
             // reparto del valor inicial que calcula el servidor solo hace falta mientras la
             // posición sigue viva.
-            const salido = hoy === 0 ? p.openingValue : p.openingSold;
+            const salido = enCartera ? p.openingSold : p.openingValue;
             const vendido = p.outflow - salido - p.unmatched;
             const latente = hoy - (p.openingValue - salido) - (p.inflow - p.unmatched);
             return { name: p.ticker, isin: p.isin, euros: euros,
                      pct: base > 0 ? euros / base * 100 : null,
-                     fuera: hoy === 0, vendido: vendido, latente: latente };
+                     fuera: !enCartera, vendido: vendido, latente: latente };
         });
     }
 
