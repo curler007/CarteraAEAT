@@ -33,7 +33,15 @@
     .period-card.open .period-caret { transform: rotate(180deg); }
 
     /* Barra proporcional a la contribución, para ver el reparto sin leer las cifras. */
-    .mover-bar { height: .5rem; border-radius: .25rem; min-width: 2px; }
+    .mover-bar { height: .5rem; border-radius: .25rem; min-width: 2px; flex: 0 0 auto; }
+
+    /* Eje con el cero en medio: lo que resta crece hacia la izquierda y lo que suma hacia la
+       derecha, así el signo se lee de un vistazo sin llegar a la cifra. Cada mitad mide lo mismo,
+       de modo que el mayor movimiento del periodo llena su lado entero. */
+    .mover-axis { display: flex; align-items: center; }
+    .mover-axis > div { flex: 1 1 0; display: flex; min-width: 0; }
+    .mover-axis > .mover-neg { justify-content: flex-end; }
+    .mover-axis > .mover-pos { border-left: 1px solid #ced4da; }
 
     /* Ruedita de "el dato aún no ha llegado". Va solo donde la espera es larga —las tarjetas
        esperan a todas las cotizaciones y encima al reconstruido— y no en las celdas de la tabla,
@@ -830,12 +838,17 @@
         const tr = document.createElement('tr');
         const c = euros >= 0 ? GREEN : RED;
         const ancho = mayor > 0 ? Math.min(100, Math.abs(euros) / mayor * 100) : 0;
+        const barra = '<div class="mover-bar" style="width:' + ancho.toFixed(1)
+                    + '%;background:' + c + '"></div>';
         tr.innerHTML =
             '<td><strong></strong> <span class="text-muted small"></span>' +
             '<div class="small mt-1 mover-split"></div></td>' +
             '<td class="text-end fw-semibold" style="color:' + c + '">' + signedEur(euros) + '</td>' +
             '<td class="text-end" style="color:' + c + '">' + (pct == null ? '—' : signedPct(pct)) + '</td>' +
-            '<td><div class="mover-bar" style="width:' + ancho.toFixed(1) + '%;background:' + c + '"></div></td>';
+            '<td><div class="mover-axis">' +
+                '<div class="mover-neg">' + (euros < 0 ? barra : '') + '</div>' +
+                '<div class="mover-pos">' + (euros >= 0 ? barra : '') + '</div>' +
+            '</div></td>';
         // El nombre y el ISIN salen de datos del usuario, así que se asignan como texto y no como
         // HTML: no hay nada que escapar si nunca se interpreta.
         tr.querySelector('strong').textContent = nombre;
