@@ -121,6 +121,22 @@ class DashboardPageRenderTest {
         assertTrue(html.contains("id=\"moversPanel\"") && html.contains("hidden"),
                 "el panel nace cerrado: se abre al pulsar una tarjeta");
 
+        // Ruedita mientras no ha llegado la llamada. Va en los huecos de espera larga —las cinco
+        // tarjetas, la TIR y el treemap—, que son los que dependen de todas las cotizaciones y del
+        // reconstruido. En las celdas de la tabla no: se rellenan una a una y serían cien ruedas.
+        assertEquals(8, html.split("role=\"status\" aria-label=\"Cargando\"", -1).length - 1,
+                "una ruedita en cada hueco de espera larga: las cinco tarjetas —la Global con su "
+                + "importe y su variación—, la TIR y el treemap");
+        for (String hueco : new String[]{"global-value", "global-delta", "today-eur", "week-eur",
+                                         "month-eur", "year-eur", "irr-global", "treemapLoading"}) {
+            int desde = html.indexOf("id=\"" + hueco + "\"");
+            assertTrue(desde > 0, "falta el hueco " + hueco);
+            assertTrue(html.indexOf("loading-spin", desde) - desde < 200,
+                    "el hueco " + hueco + " debe nacer con su ruedita");
+        }
+        assertFalse(html.contains("cell-latent\"><span class=\"spinner"),
+                "las celdas de la tabla se quedan con los tres puntos, no con ruedita");
+
         // Resumen de TIR: la global y las de ventana las completa el navegador
         for (String hueco : new String[]{"irr-global", "irr-year5", "irr-year3", "irr-year"}) {
             assertTrue(html.contains("id=\"" + hueco + "\""), "falta el hueco " + hueco);

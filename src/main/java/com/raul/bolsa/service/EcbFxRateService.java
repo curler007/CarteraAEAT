@@ -81,8 +81,15 @@ public class EcbFxRateService {
     /** Raíz que el BCE usa y la JVM no trae. Vale hasta 2046. */
     private static final String ROOT_CERT = "/certs/sectigo-public-server-auth-root-e46.pem";
 
-    /** Lo que se espera a la red cuando toca esperar. Treinta segundos era un cuelgue. */
-    private static final int READ_TIMEOUT_MS = 5_000;
+    /**
+     * Lo que se espera a la red cuando toca esperar.
+     *
+     * <p>Treinta segundos eran un cuelgue mientras la descarga vivía dentro de la petición web;
+     * ahora que va en segundo plano, el problema es el contrario: la primera vez hay que bajarse
+     * la serie entera desde 1999, unos 400 KB, y con cinco segundos no siempre llegaba. Cuando
+     * eso falla no hay tipos guardados, y lo que el usuario ve es la cartera sin valorar.
+     */
+    private static final int READ_TIMEOUT_MS = 15_000;
 
     private final RestTemplate rest;
     private final FxRateRepository repo;
