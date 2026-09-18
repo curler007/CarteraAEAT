@@ -92,15 +92,72 @@ public class PortfolioValuationService {
             }
         }
 
+        // Lo que aquel día estaba viajando de un fondo a otro también era de la cartera, aunque no
+        // estuviera en ningún fondo. Sin contarlo, el valor inicial sale corto por ese importe y la
+        // variación del periodo se lo apunta como si el mercado lo hubiera regalado.
+        Map<String, BigDecimal> inTransit = inTransitAt(operations, at);
+        BigDecimal viajando = inTransit.values().stream().reduce(BigDecimal.ZERO, BigDecimal::add);
+
         missing.sort(Comparator.naturalOrder());
-        return new PeriodBaseline(period, at.toString(), scaled(value),
+        return new PeriodBaseline(period, at.toString(), scaled(value.add(viajando)),
                 scaled(sumAfter(operations, at, OperationType.BUY)
                         .add(unmatchedAfter(operations, at))),
                 scaled(sumAfter(operations, at, OperationType.SELL)),
                 missing,
-                positions(operations, splits, at, today, opening, heldAt),
+                positions(operations, splits, at, today, opening, heldAt, inTransit),
+                // La parte en tránsito de una entrada no es una llegada nueva: ya estaba contada
+                // en el valor inicial, así que sale del desajuste igual que entró en el valor.
                 scaled(sumAfter(operations, at, OperationType.TRASPASO_IN)
+                        .subtract(viajando)
                         .subtract(sumAfter(operations, at, OperationType.TRASPASO_OUT))));
+    }
+
+    /**
+     * Dinero que en {@code at} había salido de un fondo y no había llegado al siguiente, por el
+     * valor donde acabó aterrizando.
+     *
+     * <p>Un traspaso entre fondos tarda días en ejecutarse, y en ese hueco el dinero no está en
+     * ninguna posición: los libros no tienen cuenta de efectivo, así que desaparece de la cartera
+     * y reaparece al llegar. Si una ventana empieza justo en ese hueco, el valor inicial no lo
+     * cuenta, el valor de hoy sí, y como un traspaso no es dinero nuevo tampoco se resta por
+     * ningún lado: el periodo entero se lleva ese importe como si fuera revalorización.
+     *
+     * <p>Se empareja por {@code transferId}, que es lo que une las dos patas. Por tanda de
+     * traspaso, lo que ya había salido menos lo que ya había llegado es lo que estaba en el aire,
+     * y se reparte entre las entradas posteriores por orden de fecha: son las que dicen en qué
+     * fondo aterrizó.
+     */
+    static Map<String, BigDecimal> inTransitAt(List<Operation> operations, LocalDate at) {
+        Map<String, List<Operation>> byTransfer = operations.stream()
+                .filter(op -> op.getType().isTransfer() && op.getTransferId() != null)
+                .collect(Collectors.groupingBy(Operation::getTransferId, LinkedHashMap::new,
+                        Collectors.toList()));
+
+        Map<String, BigDecimal> landing = new LinkedHashMap<>();
+        byTransfer.values().forEach(legs -> {
+            BigDecimal enElAire = legs.stream()
+                    .filter(op -> !op.getDate().isAfter(at))
+                    .map(op -> op.getType() == OperationType.TRASPASO_OUT
+                            ? amount(op) : amount(op).negate())
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            if (enElAire.signum() <= 0) return;
+
+            for (Operation in : legs.stream()
+                    .filter(op -> op.getType() == OperationType.TRASPASO_IN && op.getDate().isAfter(at))
+                    .sorted(Comparator.comparing(Operation::getDate).thenComparing(Operation::getId,
+                            Comparator.nullsLast(Comparator.naturalOrder())))
+                    .toList()) {
+                if (enElAire.signum() <= 0) break;
+                BigDecimal parte = amount(in).min(enElAire);
+                landing.merge(in.getAssetName(), parte, BigDecimal::add);
+                enElAire = enElAire.subtract(parte);
+            }
+        });
+        return landing;
+    }
+
+    private static BigDecimal amount(Operation op) {
+        return op.getTotal() == null ? BigDecimal.ZERO : op.getTotal();
     }
 
     /**
@@ -112,7 +169,8 @@ public class PortfolioValuationService {
     private List<PeriodPosition> positions(List<Operation> operations, Map<String, List<Split>> splits,
                                            LocalDate at, LocalDate today,
                                            Map<String, BigDecimal> opening,
-                                           Map<String, BigDecimal> heldAt) {
+                                           Map<String, BigDecimal> heldAt,
+                                           Map<String, BigDecimal> inTransit) {
         Map<String, PeriodFlow> flows = flowsAfter(operations, splits, at, today);
         // El nombre sale de todas las operaciones del valor y no solo de las del periodo: en una
         // semana casi ninguna posición tiene movimientos, y sin esto el desglose enseñaba el ISIN
@@ -123,12 +181,14 @@ public class PortfolioValuationService {
         opening.forEach((isin, eur) -> out.put(isin, position(isin, names.getOrDefault(isin, isin), eur,
                 soldShareOf(eur, heldAt.get(isin),
                         flows.containsKey(isin) ? flows.get(isin).outQty() : BigDecimal.ZERO),
-                flows.get(isin))));
+                flows.get(isin), inTransit.getOrDefault(isin, BigDecimal.ZERO))));
         // Los que no se tenían aquel día pero recibieron dinero después: una compra nueva, o el
-        // fondo de destino de un traspaso. Su valor inicial es cero, no "falta el dato".
+        // fondo de destino de un traspaso. Su valor inicial es cero, no "falta el dato" —salvo el
+        // dinero que ya venía de camino hacia ellos, que sí era suyo aquel día.
         flows.forEach((isin, flow) -> out.computeIfAbsent(isin, k ->
                 position(isin, names.getOrDefault(isin, flow.ticker()),
-                        BigDecimal.ZERO, BigDecimal.ZERO, flow)));
+                        BigDecimal.ZERO, BigDecimal.ZERO, flow,
+                        inTransit.getOrDefault(isin, BigDecimal.ZERO))));
         return List.copyOf(out.values());
     }
 
@@ -145,10 +205,17 @@ public class PortfolioValuationService {
                         (older, newer) -> newer, LinkedHashMap::new));
     }
 
+    /**
+     * El dinero que venía de camino se apunta en el valor inicial del fondo donde aterrizó, y deja
+     * de contar como entrada: no era dinero llegando, era dinero que ya era suyo. La contribución
+     * del valor no cambia —se resta en un sitio en vez de otro— pero la de la cartera sí, que es
+     * donde estaba el error.
+     */
     private PeriodPosition position(String isin, String ticker, BigDecimal opening,
-                                    BigDecimal openingSold, PeriodFlow flow) {
-        return new PeriodPosition(isin, ticker, scaled(opening), scaled(openingSold),
-                scaled(flow == null ? BigDecimal.ZERO : flow.inflow()),
+                                    BigDecimal openingSold, PeriodFlow flow, BigDecimal inTransit) {
+        BigDecimal inflow = (flow == null ? BigDecimal.ZERO : flow.inflow()).subtract(inTransit);
+        return new PeriodPosition(isin, ticker, scaled(opening.add(inTransit)), scaled(openingSold),
+                scaled(inflow),
                 scaled(flow == null ? BigDecimal.ZERO : flow.outflow()),
                 scaled(flow == null ? BigDecimal.ZERO : flow.unmatched()));
     }
