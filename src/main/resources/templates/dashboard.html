@@ -713,8 +713,12 @@
             // sigue flotando en lo que queda dentro. Suman la contribución, ni más ni menos.
             // Lo aparecido sin compra detrás se va con la salida que lo destapó: no es dinero que
             // entrara de verdad, y dejarlo en la mitad latente inventaría una pérdida.
-            const vendido = p.outflow - p.openingSold - p.unmatched;
-            const latente = hoy - (p.openingValue - p.openingSold) - (p.inflow - p.unmatched);
+            // Si del valor no queda nada hoy se fue todo lo que había, sin proporciones: el
+            // reparto del valor inicial que calcula el servidor solo hace falta mientras la
+            // posición sigue viva.
+            const salido = hoy === 0 ? p.openingValue : p.openingSold;
+            const vendido = p.outflow - salido - p.unmatched;
+            const latente = hoy - (p.openingValue - salido) - (p.inflow - p.unmatched);
             return { name: p.ticker, isin: p.isin, euros: euros,
                      pct: base > 0 ? euros / base * 100 : null,
                      fuera: hoy === 0, vendido: vendido, latente: latente };
@@ -760,15 +764,18 @@
             .filter(f => Math.abs(f.euros) >= 0.005)
             .sort((a, b2) => Math.abs(b2.euros) - Math.abs(a.euros));
 
-        // La barra mide contra el mayor movimiento, no contra la suma: con signos mezclados la
-        // suma puede quedar casi en cero y todas las barras saldrían enormes.
-        const mayor = filas.reduce((max, f) => Math.max(max, Math.abs(f.euros)), 0);
-        filas.forEach(f => pintarFila(f.name, f.isin + (f.fuera ? ' · ya no está en cartera' : ''),
-                                      f.euros, f.pct, mayor, f));
-
         // Lo que el dinero hizo mientras viajaba de un fondo a otro no es de ningún valor, pero
         // está dentro de la cifra de la tarjeta. Sin esta línea el reparto no sumaría.
         const drift = esVentana(period) ? (b.transferDrift || 0) : 0;
+
+        // La barra mide contra el mayor movimiento, no contra la suma: con signos mezclados la
+        // suma puede quedar casi en cero y todas las barras saldrían enormes. Los traspasos
+        // entran en esa cuenta: cuando son el movimiento más grande, medir contra otro dejaba su
+        // barra por encima del 100 % y desbordada hacia la derecha.
+        const mayor = Math.max(
+            filas.reduce((max, f) => Math.max(max, Math.abs(f.euros)), 0), Math.abs(drift));
+        filas.forEach(f => pintarFila(f.name, f.isin + (f.fuera ? ' · ya no está en cartera' : ''),
+                                      f.euros, f.pct, mayor, f));
         if (Math.abs(drift) >= 0.005) {
             pintarFila('Traspasos en tránsito', 'días fuera de mercado entre la salida y la entrada',
                        drift, null, mayor);
@@ -822,7 +829,7 @@
     function pintarFila(nombre, detalle, euros, pct, mayor, reparto) {
         const tr = document.createElement('tr');
         const c = euros >= 0 ? GREEN : RED;
-        const ancho = mayor > 0 ? Math.abs(euros) / mayor * 100 : 0;
+        const ancho = mayor > 0 ? Math.min(100, Math.abs(euros) / mayor * 100) : 0;
         tr.innerHTML =
             '<td><strong></strong> <span class="text-muted small"></span>' +
             '<div class="small mt-1 mover-split"></div></td>' +
