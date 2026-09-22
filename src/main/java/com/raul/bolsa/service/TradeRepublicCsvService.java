@@ -14,7 +14,6 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -38,13 +37,7 @@ import java.util.TreeMap;
  * siempre el histórico completo, así que el solapamiento es el caso normal, no la excepción.
  *
  * <p>Las operaciones que el usuario ya había metido a mano no tienen ese identificador, así que
- * para ellas se compara el contenido —fecha, ISIN, tipo y cantidad— y también se omiten. Sin esto
- * la primera importación duplicaría toda la parte del histórico ya introducida, y la alternativa
- * (reemplazar la cartera) se llevaría por delante las operaciones de los demás brokers.
- *
- * <p>La comparación admite que una operación anotada a mano agrupe varias ejecuciones del
- * fichero: el broker parte una orden en los trozos que casó en mercado, y al teclearla es
- * natural haber apuntado una sola compra por el total del día.
+ * para ellas el reconocimiento va por contenido; de eso se encarga {@link ManualOverlap}.
  */
 @Service
 @Slf4j
@@ -80,9 +73,6 @@ public class TradeRepublicCsvService {
     private static final DateTimeFormatter DESCRIPTION_DATE =
             DateTimeFormatter.ofPattern("dd/MM/yyyy");
 
-    /** Tope de ejecuciones de un mismo valor y día al buscar combinaciones (2^16 como máximo). */
-    private static final int MAX_GROUP_FOR_SUBSET = 16;
-
     /**
      * Las criptomonedas no tienen ISIN: Trade Republic pone el símbolo. Se traduce al
      * identificador sintético que ya usa la aplicación para poder cotizarlas.
@@ -112,18 +102,14 @@ public class TradeRepublicCsvService {
         Map<String, String> tickerByIsin = new HashMap<>();
         Map<String, AeatGroup> groupByIsin = new HashMap<>();
         Set<String> importedIds = new HashSet<>();
-        // Cantidades ya registradas a mano de cada día/valor/tipo, para no volver a importarlas.
-        Map<String, List<BigDecimal>> existingByContent = new HashMap<>();
+        ManualOverlap manual = new ManualOverlap();
         for (Operation op : existingOnly) {
             tickerByIsin.putIfAbsent(op.getAssetName().trim().toUpperCase(), op.getTicker());
             groupByIsin.putIfAbsent(op.getAssetName().trim().toUpperCase(), op.getAeatGroup());
             if (op.getNotes() != null && op.getNotes().startsWith(NOTE_PREFIX)) {
                 importedIds.add(transactionId(op.getNotes()));
             } else {
-                existingByContent
-                        .computeIfAbsent(contentKey(op.getDate(), op.getAssetName(), op.getType()),
-                                k -> new ArrayList<>())
-                        .add(op.getQuantity());
+                manual.add(op);
             }
         }
 
@@ -157,7 +143,7 @@ public class TradeRepublicCsvService {
             }
         }
 
-        duplicates += dropAlreadyInPortfolio(operations, existingByContent);
+        duplicates += manual.drop(operations);
 
         // Solo se piden valorar las que de verdad se van a dar de alta: si la entrega ya estaba
         // registrada, el usuario ya le puso precio en su día.
@@ -328,93 +314,4 @@ public class TradeRepublicCsvService {
         return raw.isEmpty() ? BigDecimal.ZERO : decimal(raw, field);
     }
 
-    /**
-     * Quita de {@code candidates} las operaciones que el usuario ya tenía anotadas a mano y
-     * devuelve cuántas ha quitado.
-     *
-     * <p>Dentro de cada día, valor y sentido se emparejan primero las cantidades idénticas. Con lo
-     * que quede, si el total del fichero coincide con el total ya registrado, se trata de la misma
-     * orden apuntada de otra forma —una sola línea por varias ejecuciones— y se descarta entera.
-     */
-    private static int dropAlreadyInPortfolio(List<OperationForm> candidates,
-                                              Map<String, List<BigDecimal>> existingByContent) {
-        if (existingByContent.isEmpty()) return 0;
-
-        Map<String, List<OperationForm>> byKey = new LinkedHashMap<>();
-        for (OperationForm f : candidates) {
-            byKey.computeIfAbsent(contentKey(f.getDate(), f.getAssetName(), f.getType()),
-                    k -> new ArrayList<>()).add(f);
-        }
-
-        List<OperationForm> drop = new ArrayList<>();
-        for (Map.Entry<String, List<OperationForm>> entry : byKey.entrySet()) {
-            List<BigDecimal> registered = existingByContent.get(entry.getKey());
-            if (registered == null) continue;
-
-            List<BigDecimal> pending = new ArrayList<>(registered);
-            List<OperationForm> unmatched = new ArrayList<>();
-            for (OperationForm f : entry.getValue()) {
-                int i = indexOfQuantity(pending, f.getQuantity());
-                if (i >= 0) {
-                    pending.remove(i);
-                    drop.add(f);
-                } else {
-                    unmatched.add(f);
-                }
-            }
-            // Lo que queda del fichero puede ser el desglose de una operación agrupada: se busca,
-            // para cada cantidad aún sin emparejar, el grupo de ejecuciones que suma justo eso.
-            for (BigDecimal quantity : pending) {
-                List<OperationForm> group = subsetSummingTo(unmatched, quantity);
-                if (group.isEmpty()) continue;
-                drop.addAll(group);
-                unmatched.removeAll(group);
-            }
-        }
-
-        // Por identidad: dos filas del fichero pueden ser iguales campo a campo y aun así ser
-        // operaciones distintas, así que no vale eliminar "las que sean iguales a esta".
-        candidates.removeIf(f -> drop.stream().anyMatch(d -> d == f));
-        return drop.size();
-    }
-
-    private static int indexOfQuantity(List<BigDecimal> quantities, BigDecimal qty) {
-        for (int i = 0; i < quantities.size(); i++) {
-            if (quantities.get(i).compareTo(qty) == 0) return i;
-        }
-        return -1;
-    }
-
-    /**
-     * Subconjunto de {@code forms} cuyas cantidades suman exactamente {@code target}, o vacío si
-     * no hay ninguno. Se prueban todas las combinaciones, así que se limita a grupos pequeños:
-     * son las ejecuciones de un mismo valor en un mismo día, que nunca son muchas. Con cantidades
-     * de seis o más decimales, que una combinación sume el total por casualidad es despreciable.
-     */
-    private static List<OperationForm> subsetSummingTo(List<OperationForm> forms, BigDecimal target) {
-        if (forms.isEmpty() || forms.size() > MAX_GROUP_FOR_SUBSET) return List.of();
-
-        List<OperationForm> best = List.of();
-        for (int mask = 1; mask < (1 << forms.size()); mask++) {
-            BigDecimal sum = BigDecimal.ZERO;
-            List<OperationForm> subset = new ArrayList<>();
-            for (int i = 0; i < forms.size(); i++) {
-                if ((mask & (1 << i)) != 0) {
-                    subset.add(forms.get(i));
-                    sum = sum.add(forms.get(i).getQuantity());
-                }
-            }
-            // Con el menor número de filas: es la lectura más conservadora del solapamiento.
-            if (sum.compareTo(target) == 0 && (best.isEmpty() || subset.size() < best.size())) {
-                best = subset;
-            }
-        }
-        return best;
-    }
-
-    /** Identidad de una operación a efectos de duplicado. El importe queda fuera a propósito:
-     *  al meterla a mano es fácil haber redondeado la comisión de otra forma. */
-    private static String contentKey(LocalDate date, String isin, OperationType type) {
-        return date + "|" + isin.trim().toUpperCase() + "|" + type;
-    }
 }

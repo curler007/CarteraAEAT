@@ -1,0 +1,7 @@
+Statement,Header,Field Name,Field Value
+Statement,Data,BrokerName,Interactive Brokers LLC
+Statement,Data,Title,Activity Statement
+Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,Date/Time,Quantity,T. Price,Proceeds,Comm/Fee,Code
+Trades,Data,Order,Stocks,GBP,ULVR,"2025-03-20, 10:00:00",50,44.2000,"-2,210.00",-3.0000,O
+Financial Instrument Information,Header,Asset Category,Symbol,Description,Conid,Security ID,Listing Exch,Multiplier,Type,Code
+Financial Instrument Information,Data,Stocks,ULVR,UNILEVER PLC,9876543,GB00B10RZP78,LSE,1,COMMON,

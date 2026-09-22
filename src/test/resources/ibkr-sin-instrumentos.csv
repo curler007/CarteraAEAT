@@ -1,0 +1,7 @@
+Statement,Header,Field Name,Field Value
+Statement,Data,BrokerName,Interactive Brokers LLC
+Statement,Data,Title,Activity Statement
+Statement,Data,Period,"April 1, 2025 - April 30, 2025"
+Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,Date/Time,Quantity,T. Price,Proceeds,Comm/Fee,Code
+Trades,Data,Order,Stocks,EUR,TEF,"2025-04-15, 09:45:00",500,4.0000,"-2,000.00",-1.0000,O
+Trades,Data,Order,Stocks,EUR,IBE,"2025-04-16, 09:45:00",100,12.0000,"-1,200.00",-1.0000,O
