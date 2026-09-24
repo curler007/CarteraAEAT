@@ -139,7 +139,7 @@ public class OperationCsvController {
                     result.duplicates()));
         }
         if (result.ignoredCount() > 0) {
-            msg.append(String.format(" Ignorados %d movimientos que no son compras ni ventas (%s).",
+            msg.append(String.format(" Ignorados %d movimientos que no entran en la cartera (%s).",
                     result.ignoredCount(), describe(result.ignored())));
         }
         // Las entregas sin coste no se avisan aquí: el listado y el dashboard las muestran de

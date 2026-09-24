@@ -1,0 +1,31 @@
+Statement,Header,Field Name,Field Value
+Statement,Data,BrokerName,Interactive Brokers LLC
+Statement,Data,BrokerAddress,"Two Pickwick Plaza, Greenwich, CT 06830"
+Statement,Data,Title,Activity Statement
+Statement,Data,Period,"January 1, 2025 - December 31, 2025"
+Statement,Data,WhenGenerated,"2026-01-08, 11:04:32 EST"
+Account Information,Header,Field Name,Field Value
+Account Information,Data,Name,CUENTA DE PRUEBA
+Account Information,Data,Account,U0000000
+Account Information,Data,Account Type,Individual
+Account Information,Data,Base Currency,EUR
+Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,Date/Time,Quantity,T. Price,C. Price,Proceeds,Comm/Fee,Basis,Realized P/L,MTM P/L,Code
+Trades,Data,Order,Stocks,USD,AAPL,"2025-02-11, 15:42:07",20,185.30,210.50,"-3,706.00",-1.0523,"3,707.0523",0,"503.00",O
+Trades,Data,Order,Stocks,USD,AAPL,"2025-09-18, 10:05:44",-8,221.75,210.50,"1,774.00",-1.0411,"1,482.8209",290.1380,-90.00,C
+Trades,SubTotal,,Stocks,USD,AAPL,,12,,,"-1,932.00",-2.0934,"2,224.2314",290.1380,413.00,
+Trades,Data,Order,Stocks,USD,MSFT,"2025-03-04, 16:01:19",5,398.10,430.00,"-1,990.50",-1.0000,"1,991.50",0,159.50,O
+Trades,SubTotal,,Stocks,USD,MSFT,,5,,,"-1,990.50",-1.0000,"1,991.50",0,159.50,
+Trades,Total,,Stocks,USD,,,,,,"-3,922.50",-3.0934,"4,215.7314",290.1380,572.50,
+Trades,Data,Order,Stocks,EUR,SAN,"2025-05-06, 09:12:55",300,4.8120,5.2000,"-1,443.60",-1.2000,"1,444.80",0,116.40,O
+Trades,Total,,Stocks,EUR,,,,,,"-1,443.60",-1.2000,"1,444.80",0,116.40,
+Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,Date/Time,Quantity,T. Price,C. Price,Proceeds,Comm/Fee,Basis,Realized P/L,MTM P/L,Code
+Trades,Data,Order,Equity and Index Options,USD,AAPL 26JAN26 200.0 C,"2025-11-03, 14:30:00",2,7.4500,6.1000,"-1,490.00",-2.1400,"1,492.14",0,-270.00,O
+Trades,Total,,Equity and Index Options,USD,,,,,,"-1,490.00",-2.1400,"1,492.14",0,-270.00,
+Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,Date/Time,Quantity,T. Price,C. Price,Proceeds,Comm/Fee,Basis,Realized P/L,MTM P/L,Code
+Trades,Data,Order,Forex,USD,EUR.USD,"2025-02-10, 09:00:11","5,000",1.0812,1.0790,"-5,406.00",-2.0000,"5,408.00",0,-11.00,
+Trades,Total,,Forex,USD,,,,,,"-5,406.00",-2.0000,"5,408.00",0,-11.00,
+Financial Instrument Information,Header,Asset Category,Symbol,Description,Conid,Security ID,Listing Exch,Multiplier,Type,Code
+Financial Instrument Information,Data,Stocks,AAPL,APPLE INC,265598,US0378331005,NASDAQ,1,COMMON,
+Financial Instrument Information,Data,Stocks,MSFT,MICROSOFT CORP,272093,US5949181045,NASDAQ,1,COMMON,
+Financial Instrument Information,Data,Stocks,SAN,BANCO SANTANDER SA,13977,ES0113900J37,BM,1,COMMON,
+Financial Instrument Information,Data,Equity and Index Options,AAPL 26JAN26 200.0 C,AAPL 26JAN26 200.0 C,700000001,,CBOE,100,,

@@ -9,6 +9,7 @@ import com.raul.bolsa.repository.OperationRepository;
 import com.raul.bolsa.repository.SaleRecordRepository;
 import com.raul.bolsa.repository.SplitRepository;
 import com.raul.bolsa.web.dto.CsvImportResult;
+import com.raul.bolsa.web.dto.IbkrParseResult;
 import com.raul.bolsa.web.dto.ImportConflict;
 import com.raul.bolsa.web.dto.InversisParseResult;
 import com.raul.bolsa.web.dto.ImportMode;
@@ -73,6 +74,7 @@ public class OperationCsvService {
     public static final String FORMAT_OWN = "formato propio";
     public static final String FORMAT_TRADE_REPUBLIC = "Trade Republic";
     public static final String FORMAT_INVERSIS = "MyInvestor";
+    public static final String FORMAT_IBKR = "Interactive Brokers";
 
     private final OperationRepository operationRepo;
     private final SplitRepository splitRepo;
@@ -82,6 +84,7 @@ public class OperationCsvService {
     private final SplitService splitService;
     private final TradeRepublicCsvService tradeRepublicService;
     private final InversisXlsService inversisService;
+    private final InteractiveBrokersCsvService ibkrService;
     private final FifoService fifoService;
 
     // ─── Exportación ─────────────────────────────────────────────────────────
@@ -163,9 +166,14 @@ public class OperationCsvService {
 
         String text = stripBom(new String(content, StandardCharsets.UTF_8));
 
-        List<List<String>> tradeRepublicRows = parse(text, TradeRepublicCsvService.separator());
-        if (!tradeRepublicRows.isEmpty() && TradeRepublicCsvService.matches(tradeRepublicRows.get(0))) {
-            return importTradeRepublic(userId, tradeRepublicRows, mode);
+        // Los dos ficheros de broker en CSV se separan por comas, así que se leen una sola vez y
+        // cada uno se reconoce por su propia firma.
+        List<List<String>> brokerRows = parse(text, TradeRepublicCsvService.separator());
+        if (!brokerRows.isEmpty() && TradeRepublicCsvService.matches(brokerRows.get(0))) {
+            return importTradeRepublic(userId, brokerRows, mode);
+        }
+        if (InteractiveBrokersCsvService.matches(brokerRows)) {
+            return importInteractiveBrokers(userId, brokerRows, mode);
         }
 
         List<List<String>> rows = parse(text);
@@ -442,6 +450,54 @@ public class OperationCsvService {
         return new CsvImportResult(FORMAT_TRADE_REPUBLIC, operations.size(), 0,
                 parsed.ignored(), parsed.duplicates(), parsed.pendingValuation(),
                 List.of(), List.of(), List.of());
+    }
+
+    // ─── Importación de Interactive Brokers ──────────────────────────────────
+
+    /**
+     * Del Activity Statement solo entran las compras y ventas de acciones y ETFs. Lo demás
+     * —opciones, futuros, divisas— se cuenta y se informa, pero no toca la cartera.
+     *
+     * <p>El extracto se pide por periodos y lo normal es que el nuevo solape con el anterior, así
+     * que lo ya cargado se reconoce por la marca de las notas y se omite en vez de duplicarse.
+     *
+     * <p>Las altas van sin tocar el FIFO y se recalcula una sola vez al final: un extracto trae
+     * años de operaciones de golpe, y resolver el FIFO en cada una sería cuadrático sobre un
+     * resultado intermedio que además no significa nada mientras falten operaciones por cargar.
+     */
+    private CsvImportResult importInteractiveBrokers(Long userId, List<List<String>> rows,
+                                                     ImportMode mode) {
+        List<Operation> existing = mode == ImportMode.REPLACE
+                ? List.of()
+                : operationRepo.findByUserId(userId);
+
+        IbkrParseResult parsed = ibkrService.parse(rows, existing);
+
+        if (!parsed.errors().isEmpty()) {
+            return CsvImportResult.failed(parsed.errors());
+        }
+        // Que no haya nada nuevo no es un error: es lo que pasa al reimportar un extracto que ya
+        // estaba cargado, o uno que solo trae opciones. El usuario no tiene nada que corregir.
+        if (parsed.operations().isEmpty()) {
+            return new CsvImportResult(FORMAT_IBKR, 0, 0,
+                    parsed.ignored(), parsed.duplicates(), List.of(), List.of(), List.of(),
+                    List.of());
+        }
+
+        if (mode == ImportMode.REPLACE) {
+            deleteEverythingOf(userId);
+        }
+
+        List<OperationForm> operations = new ArrayList<>(parsed.operations());
+        operations.sort(Comparator.comparing(OperationForm::getDate));
+        operations.forEach(f -> operationService.saveDeferred(userId, f));
+        fifoService.recalculateAll(userId);
+
+        log.info("Importadas {} operaciones de Interactive Brokers para el usuario {} "
+                        + "(modo {}, {} operaciones ignoradas, {} duplicadas)",
+                operations.size(), userId, mode, parsed.ignoredCount(), parsed.duplicates());
+        return new CsvImportResult(FORMAT_IBKR, operations.size(), 0,
+                parsed.ignored(), parsed.duplicates(), List.of(), List.of(), List.of(), List.of());
     }
 
     // ─── Importación de MyInvestor (Inversis) ────────────────────────────────
