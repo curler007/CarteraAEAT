@@ -16,10 +16,13 @@ import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.NavigableMap;
 import java.util.Optional;
+import java.util.TreeMap;
 
 @Service
 @Slf4j
@@ -45,8 +48,16 @@ public class QuoteService {
     /**
      * Query para valorar la cartera en fechas pasadas. Va aparte de la del dashboard, que se pide
      * una vez por posición en cada carga: aquí interesa alcance y allí ligereza.
+     *
+     * <p>Once años y no diez, por lo mismo que la del dashboard pide dos: la gráfica llega a diez
+     * años atrás, y con {@code range=10y} su primera sesión ya caía después de esa fecha y los
+     * primeros días de la ventana se quedaban sin precio. Se pide por fechas porque Yahoo no
+     * acepta {@code range=11y}.
      */
-    private static final String HISTORIC_CHART_QUERY = "interval=1d&range=10y";
+    private static String historicChartQuery() {
+        long from = LocalDate.now().minusYears(11).atStartOfDay(ZoneOffset.UTC).toEpochSecond();
+        return "interval=1d&period1=" + from + "&period2=" + Instant.now().getEpochSecond();
+    }
 
 
     /** ISINs no estándar que Yahoo Finance no reconoce → símbolo preferido en EUR, fallback en USD */
@@ -298,6 +309,7 @@ public class QuoteService {
 
         private final Map<String, List<String>> symbols;
         private final Map<String, JsonNode> charts;
+        private final Map<String, NavigableMap<LocalDate, BigDecimal>> closes = new HashMap<>();
 
         private Historic() {
             rollOverIfNewDay();
@@ -389,13 +401,38 @@ public class QuoteService {
         public Optional<Money> closeAt(String symbol, LocalDate date) {
             JsonNode result = charts.computeIfAbsent(symbol, this::chart);
             if (result == null) return Optional.empty();
-            BigDecimal close = closeOn(result, date);
-            if (close == null) return Optional.empty();
+            Map.Entry<LocalDate, BigDecimal> found = closesOf(symbol, result).floorEntry(date);
+            if (found == null) return Optional.empty();
+            BigDecimal close = found.getValue();
             String currency = result.path("meta").path("currency").asText("EUR");
             boolean pence = "GBp".equals(currency) || "GBX".equals(currency);
             return Optional.of(pence
                     ? new Money(close.divide(BigDecimal.valueOf(100), 6, RoundingMode.HALF_UP), "GBP")
                     : new Money(close, currency));
+        }
+
+        /**
+         * Los cierres de un símbolo indexados por fecha, con la misma regla que {@code closeOn}:
+         * solo los positivos, y si un día sale dos veces gana el último.
+         *
+         * <p>Existe por la gráfica, que pide un cierre por valor y por día de todo un año. Recorrer
+         * la serie de diez años en cada consulta eran decenas de millones de pasos por carga; así
+         * se recorre una vez por símbolo y sesión.
+         */
+        private NavigableMap<LocalDate, BigDecimal> closesOf(String symbol, JsonNode result) {
+            return closes.computeIfAbsent(symbol, k -> {
+                JsonNode stamps = result.path("timestamp");
+                JsonNode values = result.path("indicators").path("quote").path(0).path("close");
+                NavigableMap<LocalDate, BigDecimal> out = new TreeMap<>();
+                for (int i = 0; i < stamps.size() && i < values.size(); i++) {
+                    if (values.get(i).isNumber() && values.get(i).asDouble() > 0) {
+                        out.put(Instant.ofEpochSecond(stamps.get(i).asLong())
+                                        .atZone(ZoneOffset.UTC).toLocalDate(),
+                                BigDecimal.valueOf(values.get(i).asDouble()));
+                    }
+                }
+                return out;
+            });
         }
 
         private List<LocalDate> tradingDays(JsonNode result) {
@@ -413,7 +450,7 @@ public class QuoteService {
 
         private JsonNode chart(String symbol) {
             try {
-                return fetchChartResult(symbol, HISTORIC_CHART_QUERY).orElse(null);
+                return fetchChartResult(symbol, historicChartQuery()).orElse(null);
             } catch (Exception e) {
                 log.warn("No se pudo obtener el histórico de {}: {}", symbol, e.getMessage());
                 return null;

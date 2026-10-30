@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="es">
+<head th:replace="~{fragments/layout :: head('Gráfica')}"></head>
+<body>
+<nav th:replace="~{fragments/layout :: navbar}"></nav>
+
+<style>
+    .loading-spin { width: .85rem; height: .85rem; border-width: .15em; vertical-align: middle; }
+    .chart-box { position: relative; height: 60vh; min-height: 320px; }
+    .legend-swatch { display: inline-block; width: .8rem; height: .8rem; border-radius: 2px;
+                     vertical-align: -.05rem; margin-right: .3rem; }
+</style>
+
+<div class="container-fluid px-4">
+
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+        <h4 class="mb-0"><i class="bi bi-graph-up me-2"></i>Evolución de la cartera</h4>
+        <div class="btn-group btn-group-sm" role="group" aria-label="Periodo de la gráfica">
+            <button type="button" class="btn btn-outline-secondary active" data-years="1">1 año</button>
+            <button type="button" class="btn btn-outline-secondary" data-years="2">2 años</button>
+            <button type="button" class="btn btn-outline-secondary" data-years="5">5 años</button>
+            <button type="button" class="btn btn-outline-secondary" data-years="10">10 años</button>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-3">
+        <div class="col-6 col-md-3">
+            <div class="card shadow-sm h-100"><div class="card-body py-2">
+                <div class="text-muted small">Valor hoy</div>
+                <div class="fs-5 fw-bold" id="kpi-value">—</div>
+            </div></div>
+        </div>
+        <div class="col-6 col-md-3">
+            <div class="card shadow-sm h-100"><div class="card-body py-2">
+                <div class="text-muted small">Coste de lo que tienes</div>
+                <div class="fs-5 fw-bold" id="kpi-cost">—</div>
+            </div></div>
+        </div>
+        <div class="col-6 col-md-3">
+            <div class="card shadow-sm h-100"><div class="card-body py-2">
+                <div class="text-muted small">Beneficio hoy</div>
+                <div class="fs-5 fw-bold" id="kpi-gain">—</div>
+            </div></div>
+        </div>
+        <div class="col-6 col-md-3">
+            <div class="card shadow-sm h-100"><div class="card-body py-2">
+                <div class="text-muted small" id="kpi-gain-start-label">Beneficio hace un año</div>
+                <div class="fs-5 fw-bold" id="kpi-gain-start">—</div>
+                <div class="small" id="kpi-gain-change"></div>
+            </div></div>
+        </div>
+    </div>
+
+    <div id="missingAlert" class="alert alert-warning small d-none"></div>
+
+    <div class="card shadow-sm mb-4">
+        <div class="card-body">
+            <div class="small text-muted mb-2">
+                <span class="legend-swatch" style="background: rgba(13,110,253,.35)"></span>Coste de lo que tienes
+                <span class="legend-swatch ms-3" style="background: rgba(25,135,84,.45)"></span>Beneficio
+                <span class="legend-swatch ms-3" style="background: rgba(220,53,69,.45)"></span>Pérdida
+                <span class="legend-swatch ms-3" style="background: #212529; height: .2rem; vertical-align: .2rem"></span>Valor de la cartera
+                <span class="ms-3">▼</span> Venta, con su resultado
+            </div>
+            <div class="chart-box">
+                <div id="chartLoading" class="text-muted small">
+                    <span class="spinner-border spinner-border-sm text-secondary loading-spin" role="status"
+                          aria-label="Cargando"></span> Cargando cotizaciones…
+                </div>
+                <canvas id="chart" class="d-none"></canvas>
+            </div>
+            <p class="small text-muted mt-2 mb-0">
+                El azul es lo que te costó lo que tienes cada día, como en la tarjeta Global: sube
+                con cada compra y al vender baja por el coste de lo vendido. Los traspasos entre
+                fondos no lo mueven. La distancia entre las dos curvas es la plusvalía latente; al
+                vender baja justo por lo que realizas, que es lo que dice la etiqueta de la venta.
+            </p>
+        </div>
+    </div>
+</div>
+
+<div th:replace="~{fragments/layout :: scripts}"></div>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script th:inline="none">
+    const eur = new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' });
+    const eur0 = new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 });
+    const fecha = new Intl.DateTimeFormat('es-ES', { day: '2-digit', month: 'short', year: 'numeric' });
+    const mes = new Intl.DateTimeFormat('es-ES', { month: 'short', year: '2-digit' });
+    const asDate = s => new Date(s + 'T00:00:00');
+    const signedEur = (n, fmt = eur) => (n > 0 ? '+' : '') + fmt.format(n);
+    const GREEN = '#198754', RED = '#dc3545';
+
+    function signed(el, n) {
+        el.textContent = signedEur(n);
+        el.classList.remove('gain-pos', 'gain-neg', 'text-body');
+        el.classList.add(n > 0 ? 'gain-pos' : n < 0 ? 'gain-neg' : 'text-body');
+    }
+
+    const ago = years => years === 1 ? 'hace un año' : 'hace ' + years + ' años';
+    const inWindow = years => years === 1 ? 'en el año' : 'en ' + years + ' años';
+    /** Meses que llevan etiqueta en el eje: con cinco años, una por mes no cabe. */
+    const tickMonths = { 1: 1, 2: 3, 5: 6, 10: 12 };
+
+    /** Las ventas de cada día juntas: un día con dos ventas lleva una sola marca. */
+    function salesByDate(sales) {
+        const out = new Map();
+        sales.forEach(s => {
+            const day = out.get(s.date) || { items: [], gain: 0 };
+            day.items.push(s);
+            day.gain += s.gainLoss;
+            out.set(s.date, day);
+        });
+        return out;
+    }
+
+    /** Escribe el resultado encima de cada marca de venta, para no tener que pasar el ratón. */
+    const saleLabels = sales => ({
+        id: 'saleLabels',
+        afterDatasetsDraw(chart) {
+            const meta = chart.getDatasetMeta(2);
+            const ctx = chart.ctx;
+            ctx.save();
+            ctx.font = '600 11px system-ui, sans-serif';
+            ctx.textAlign = 'center';
+            meta.data.forEach((el, i) => {
+                const day = sales.get(chart.data.labels[i]);
+                if (!day || el.skip) return;
+                ctx.fillStyle = day.gain >= 0 ? GREEN : RED;
+                ctx.fillText(signedEur(day.gain, eur0), el.x, el.y - 12);
+            });
+            ctx.restore();
+        }
+    });
+
+    let chart = null;
+
+    function render(data, years) {
+        const pts = data.points;
+        document.getElementById('chartLoading').classList.add('d-none');
+        const canvas = document.getElementById('chart');
+        canvas.classList.remove('d-none');
+        if (pts.length === 0) return;
+
+        const first = pts[0], last = pts[pts.length - 1];
+        const gainStart = first.value - first.cost, gainNow = last.value - last.cost;
+        document.getElementById('kpi-value').textContent = eur.format(last.value);
+        document.getElementById('kpi-cost').textContent = eur.format(last.cost);
+        signed(document.getElementById('kpi-gain'), gainNow);
+        signed(document.getElementById('kpi-gain-start'), gainStart);
+        const change = document.getElementById('kpi-gain-change');
+        document.getElementById('kpi-gain-start-label').textContent = 'Beneficio ' + ago(years);
+        change.textContent = signedEur(gainNow - gainStart) + ' ' + inWindow(years);
+        change.style.color = gainNow - gainStart >= 0 ? GREEN : RED;
+
+        const alert = document.getElementById('missingAlert');
+        alert.textContent = 'Sin precio algunos días para ' + data.missing.join(', ')
+            + '. En esos días el valor sale corto y la gráfica marca una pérdida que no es real.';
+        alert.classList.toggle('d-none', data.missing.length === 0);
+
+        const sales = salesByDate(data.sales);
+        chart = new Chart(canvas, {
+            type: 'line',
+            data: {
+                labels: pts.map(p => p.date),
+                datasets: [
+                    {
+                        label: 'Coste',
+                        data: pts.map(p => p.cost),
+                        borderColor: 'rgba(13,110,253,.8)',
+                        borderWidth: 1,
+                        backgroundColor: 'rgba(13,110,253,.25)',
+                        fill: 'start',
+                        pointRadius: 0
+                    },
+                    {
+                        label: 'Valor',
+                        data: pts.map(p => p.value),
+                        borderColor: '#212529',
+                        borderWidth: 1.5,
+                        // El hueco entre las dos curvas es la plusvalía: verde si el valor va
+                        // por encima del coste, rojo si va por debajo.
+                        fill: { target: 0, above: 'rgba(25,135,84,.45)', below: 'rgba(220,53,69,.45)' },
+                        pointRadius: 0,
+                        pointHoverRadius: 3
+                    },
+                    {
+                        // Las ventas, sobre la línea del valor el día que se llevan su resultado.
+                        label: 'Venta',
+                        data: pts.map(p => sales.has(p.date) ? p.value : null),
+                        showLine: false,
+                        pointStyle: 'triangle',
+                        rotation: 180,
+                        pointRadius: 6,
+                        pointHoverRadius: 8,
+                        pointBackgroundColor: pts.map(p => sales.has(p.date) && sales.get(p.date).gain < 0 ? RED : GREEN),
+                        pointBorderColor: '#fff'
+                    }
+                ]
+            },
+            options: {
+                maintainAspectRatio: false,
+                animation: false,
+                layout: { padding: { top: 18 } },
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            title: items => fecha.format(asDate(items[0].label)),
+                            label: item => {
+                                if (item.datasetIndex !== 2) return ' ' + item.dataset.label + ': ' + eur.format(item.raw);
+                                return sales.get(item.label).items.map(s =>
+                                    ' Venta ' + s.ticker + ': cobrado ' + eur.format(s.proceeds)
+                                    + ', resultado ' + signedEur(s.gainLoss));
+                            },
+                            footer: items => {
+                                const p = pts[items[0].dataIndex];
+                                const gain = p.value - p.cost;
+                                return [(gain >= 0 ? 'Beneficio: ' : 'Pérdida: ') + signedEur(gain)]
+                                    .concat(p.complete ? [] : ['Falta el precio de algún valor']);
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        grid: { display: false },
+                        ticks: {
+                            autoSkip: false, maxRotation: 0,
+                            // Una marca por mes, el día 1, en vez de las que caigan.
+                            callback: (v, i) => {
+                                const d = pts[i].date;
+                                const month = Number(d.slice(5, 7)) - 1;
+                                return d.endsWith('-01') && month % tickMonths[years] === 0
+                                    ? mes.format(asDate(d)) : null;
+                            }
+                        }
+                    },
+                    y: { ticks: { callback: v => eur0.format(v) } }
+                }
+            },
+            plugins: [saleLabels(sales)]
+        });
+    }
+
+    const loading = document.getElementById('chartLoading');
+    const loadingHtml = loading.innerHTML;
+    const buttons = document.querySelectorAll('[data-years]');
+    let requested = 0;
+
+    function load(years) {
+        // Si se pulsa otro periodo antes de que llegue el anterior, gana el último pulsado.
+        const ticket = ++requested;
+        buttons.forEach(b => b.classList.toggle('active', Number(b.dataset.years) === years));
+        if (chart) { chart.destroy(); chart = null; }
+        document.getElementById('chart').classList.add('d-none');
+        loading.innerHTML = loadingHtml;
+        loading.classList.remove('d-none');
+        fetch('/api/portfolio-history?years=' + years)
+            .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+            .then(data => { if (ticket === requested) render(data, years); })
+            .catch(e => {
+                if (ticket === requested) loading.textContent = 'No se pudo cargar la gráfica (' + e.message + ').';
+            });
+    }
+
+    buttons.forEach(b => b.addEventListener('click', () => load(Number(b.dataset.years))));
+    load(1);
+</script>
+</body>
+</html>
