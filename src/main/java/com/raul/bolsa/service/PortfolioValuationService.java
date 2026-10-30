@@ -2,13 +2,16 @@ package com.raul.bolsa.service;
 
 import com.raul.bolsa.domain.Operation;
 import com.raul.bolsa.domain.OperationType;
+import com.raul.bolsa.domain.SaleRecord;
 import com.raul.bolsa.domain.Split;
 import com.raul.bolsa.repository.OperationRepository;
+import com.raul.bolsa.repository.SaleRecordRepository;
 import com.raul.bolsa.repository.SplitRepository;
 import com.raul.bolsa.web.dto.MissingOrigin;
 import com.raul.bolsa.web.dto.PeriodBaseline;
 import com.raul.bolsa.web.dto.PeriodFlow;
 import com.raul.bolsa.web.dto.PeriodPosition;
+import com.raul.bolsa.web.dto.PortfolioHistory;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -23,6 +26,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.TreeSet;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
@@ -42,6 +48,7 @@ public class PortfolioValuationService {
 
     private final OperationRepository operationRepo;
     private final SplitRepository splitRepo;
+    private final SaleRecordRepository saleRecordRepo;
     private final SplitService splitService;
     private final QuoteService quoteService;
     private final IsinTwinService twinService;
@@ -62,6 +69,123 @@ public class PortfolioValuationService {
         dates.forEach((period, at) ->
                 out.add(baseline(period, operations, splits, historic, symbols, userId, at, today)));
         return out;
+    }
+
+    /**
+     * Valor de la cartera y lo que costó lo que había en ella, día a día, de {@code from} a {@code to}.
+     *
+     * <p>El coste es el mismo que el de la tarjeta Global: compras menos el coste FIFO de lo
+     * vendido. Sale de los registros de venta y no de los lotes, que solo guardan su estado de hoy.
+     * Los traspasos no lo mueven, porque el coste pasa entero del fondo de origen al de destino.
+     *
+     * <p>Se calcula al vuelo y no se guarda: los cierres de Yahoo ya están en la caché del día —el
+     * dashboard los pide para sus tarjetas— y con ellos esto es pura cuenta. Guardarlo obligaría a
+     * invalidar a mano con cada operación, split, gemelo o importación, y un olvido dejaría la
+     * gráfica mal sin que nada lo notara.
+     *
+     * <p>La cartera se lleva al día recorriendo las operaciones una sola vez, en vez de
+     * reconstruirla desde cero para cada fecha como hace {@link #holdingsAt}: es la misma suma,
+     * pero hecha 366 veces se notaba.
+     */
+    public PortfolioHistory history(Long userId, LocalDate from, LocalDate to) {
+        List<Operation> operations = operationRepo.findByUserId(userId).stream()
+                .sorted(Comparator.comparing(Operation::getDate).thenComparing(Operation::getId,
+                        Comparator.nullsLast(Comparator.naturalOrder())))
+                .toList();
+        Map<String, List<Split>> splits = splitRepo.findByUserId(userId).stream()
+                .collect(Collectors.groupingBy(s -> s.getTicker().toUpperCase()));
+        QuoteService.Historic historic = quoteService.openHistoric();
+        LocalDate today = LocalDate.now();
+        Map<String, String> symbols = new HashMap<>();
+        Map<String, String> names = tickersByIsin(operations);
+        List<SaleRecord> records = saleRecordRepo.findByUserId(userId);
+        Map<Long, BigDecimal> costBySell = sumBySell(records, SaleRecord::getCostBasis);
+
+        Map<String, BigDecimal> held = new HashMap<>();
+        Set<String> missing = new TreeSet<>();
+        List<PortfolioHistory.Point> points = new ArrayList<>();
+        BigDecimal cost = BigDecimal.ZERO;
+        int next = 0;
+
+        for (LocalDate day = from; !day.isAfter(to); day = day.plusDays(1)) {
+            // Lo que cambió el coste ese día. El primero arrastra además todo lo anterior a la
+            // ventana: el coste de lo que se tenía hace un año viene de compras de antes.
+            BigDecimal flow = BigDecimal.ZERO;
+            for (; next < operations.size() && !operations.get(next).getDate().isAfter(day); next++) {
+                Operation op = operations.get(next);
+                BigDecimal qty = op.getQuantity().multiply(splitService.cumulativeFactor(
+                        splits.getOrDefault(op.getTicker().toUpperCase(), List.of()), op.getDate(), today));
+                held.merge(op.getAssetName(), op.getType().reducesPosition() ? qty.negate() : qty,
+                        BigDecimal::add);
+                flow = flow.add(costChange(op, costBySell));
+            }
+
+            BigDecimal value = BigDecimal.ZERO;
+            boolean complete = true;
+            for (Map.Entry<String, BigDecimal> position : held.entrySet()) {
+                if (position.getValue().signum() <= 0) continue;
+                String isin = position.getKey();
+                String symbol = symbols.computeIfAbsent(isin, k -> symbolOf(historic, userId, k));
+                BigDecimal eur = symbol == null ? null : valueOf(historic, symbol, position.getValue(), day);
+                if (eur == null) {
+                    complete = false;
+                    missing.add(names.getOrDefault(isin, isin));
+                } else {
+                    value = value.add(eur);
+                }
+            }
+            // Sin el dinero que viaja entre fondos, cada traspaso abriría un hueco rojo de su
+            // tamaño entero durante los días que tarda en llegar.
+            value = value.add(inTransitAt(operations, day).values().stream()
+                    .reduce(BigDecimal.ZERO, BigDecimal::add));
+
+            cost = cost.add(flow);
+            points.add(new PortfolioHistory.Point(day.toString(), scaled(value), scaled(cost), complete));
+        }
+        return new PortfolioHistory(points, List.copyOf(missing),
+                salesBetween(operations, sumBySell(records, SaleRecord::getGainLoss), from, to));
+    }
+
+    /**
+     * Las ventas de la ventana con lo que dejaron, para marcarlas en la gráfica: el día de una
+     * venta el beneficio baja de golpe por lo que se realizó, y sin la marca parecería que lo ha
+     * hecho la bolsa.
+     *
+     * <p>El resultado sale de los registros de venta, los mismos que van a la AEAT. La parte de
+     * una venta que no casó con ningún lote no tiene registro y por tanto tampoco resultado.
+     */
+    private List<PortfolioHistory.Sale> salesBetween(List<Operation> operations,
+                                                     Map<Long, BigDecimal> gainBySell,
+                                                     LocalDate from, LocalDate to) {
+        return operations.stream()
+                .filter(op -> op.getType() == OperationType.SELL
+                        && !op.getDate().isBefore(from) && !op.getDate().isAfter(to))
+                .map(op -> new PortfolioHistory.Sale(op.getDate().toString(), op.getTicker(),
+                        scaled(amount(op)), scaled(gainBySell.getOrDefault(op.getId(), BigDecimal.ZERO))))
+                .toList();
+    }
+
+    private static Map<Long, BigDecimal> sumBySell(List<SaleRecord> records,
+                                                   Function<SaleRecord, BigDecimal> field) {
+        return records.stream().collect(Collectors.groupingBy(r -> r.getSellOperation().getId(),
+                Collectors.reducing(BigDecimal.ZERO, field, BigDecimal::add)));
+    }
+
+    /**
+     * Lo que una operación cambia el coste de la cartera. La compra lo sube por lo que se pagó; la
+     * venta lo baja por el coste FIFO de los lotes que consumió, no por lo cobrado: la diferencia
+     * es el resultado, que sale del beneficio y no de lo puesto. Un canje solo reparte el coste
+     * entre lotes y un traspaso lo cambia de fondo, así que ninguno lo mueve. Salvo la parte de una
+     * salida sin lote, que entra con el valor del día porque así da de alta el FIFO el destino (ver
+     * {@link MissingOrigin}).
+     */
+    private static BigDecimal costChange(Operation op, Map<Long, BigDecimal> costBySell) {
+        return switch (op.getType()) {
+            case BUY -> amount(op);
+            case SELL -> costBySell.getOrDefault(op.getId(), BigDecimal.ZERO).negate();
+            case TRASPASO_OUT -> MissingOrigin.unmatchedValue(op);
+            default -> BigDecimal.ZERO;
+        };
     }
 
     /** Títulos por ISIN en poder del inversor en {@code at}, cargando sus operaciones y splits. */
