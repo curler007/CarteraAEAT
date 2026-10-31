@@ -12,15 +12,19 @@ import java.util.List;
  * cartera aunque siga siendo del inversor, y por eso cada una se marca con su resultado.
  *
  * @param points  un punto por día natural, del primero al último de la ventana
- * @param missing valores que algún día de la ventana no se pudieron valorar, por su nombre. En
- *                esos días el valor sale corto y la gráfica pinta una pérdida que no existe
+ * @param estimated valores que algún día de la ventana no tuvieron cierre en Yahoo y se valoraron
+ *                al precio de su última operación, por su nombre
+ * @param missing valores que algún día no se pudieron valorar de ninguna manera, por su nombre: ni
+ *                cierre ni operación con importe. En esos días el valor sale corto y la gráfica
+ *                pinta una pérdida que no existe
  * @param sales   las ventas de la ventana, para marcar en la gráfica el beneficio que se llevan
  */
-public record PortfolioHistory(List<Point> points, List<String> missing, List<Sale> sales) {
+public record PortfolioHistory(List<Point> points, List<String> estimated, List<String> missing,
+                               List<Sale> sales) {
 
     /**
      * @param cost     lo que costó lo que había en cartera ese día
-     * @param complete false si ese día faltó el precio de algún valor
+     * @param complete false si ese día algún valor se valoró sin cierre de Yahoo, o no se valoró
      */
     public record Point(String date, BigDecimal value, BigDecimal cost, boolean complete) {}
 

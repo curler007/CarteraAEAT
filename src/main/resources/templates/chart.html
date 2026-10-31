@@ -20,6 +20,8 @@
             <button type="button" class="btn btn-outline-secondary" data-years="2">2 años</button>
             <button type="button" class="btn btn-outline-secondary" data-years="5">5 años</button>
             <button type="button" class="btn btn-outline-secondary" data-years="10">10 años</button>
+            <button type="button" class="btn btn-outline-secondary" data-years="max"
+                    title="Desde la primera operación registrada">Todo</button>
         </div>
     </div>
 
@@ -51,6 +53,11 @@
         </div>
     </div>
 
+    <div id="estimatedAlert" class="alert alert-info small d-none">
+        <span id="estimatedText"></span>
+        Si Yahoo tiene ese valor con histórico en otro mercado, puedes indicarlo en
+        <a href="/gemelos" class="alert-link">Gemelos</a>.
+    </div>
     <div id="missingAlert" class="alert alert-warning small d-none"></div>
 
     <div class="card shadow-sm mb-4">
@@ -96,10 +103,18 @@
         el.classList.add(n > 0 ? 'gain-pos' : n < 0 ? 'gain-neg' : 'text-body');
     }
 
-    const ago = years => years === 1 ? 'hace un año' : 'hace ' + years + ' años';
-    const inWindow = years => years === 1 ? 'en el año' : 'en ' + years + ' años';
-    /** Meses que llevan etiqueta en el eje: con cinco años, una por mes no cabe. */
-    const tickMonths = { 1: 1, 2: 3, 5: 6, 10: 12 };
+    const ago = (years, first) => years === 'max' ? 'al empezar (' + fecha.format(asDate(first)) + ')'
+        : years === '1' ? 'hace un año' : 'hace ' + years + ' años';
+    const inWindow = years => years === 'max' ? 'desde el principio'
+        : years === '1' ? 'en el año' : 'en ' + years + ' años';
+    /**
+     * Cada cuántos meses lleva etiqueta el eje, según lo que abarque la serie: con cinco años una
+     * por mes no cabe, y "Todo" puede ser cualquier cosa, de meses a décadas.
+     */
+    function tickMonths(days) {
+        const years = days / 365;
+        return years <= 1.1 ? 1 : years <= 2.1 ? 3 : years <= 5.1 ? 6 : years <= 12 ? 12 : years <= 25 ? 24 : 60;
+    }
 
     /** Las ventas de cada día juntas: un día con dos ventas lleva una sola marca. */
     function salesByDate(sales) {
@@ -148,16 +163,21 @@
         signed(document.getElementById('kpi-gain'), gainNow);
         signed(document.getElementById('kpi-gain-start'), gainStart);
         const change = document.getElementById('kpi-gain-change');
-        document.getElementById('kpi-gain-start-label').textContent = 'Beneficio ' + ago(years);
+        document.getElementById('kpi-gain-start-label').textContent = 'Beneficio ' + ago(years, first.date);
         change.textContent = signedEur(gainNow - gainStart) + ' ' + inWindow(years);
         change.style.color = gainNow - gainStart >= 0 ? GREEN : RED;
 
+        document.getElementById('estimatedText').textContent =
+            'Sin cotización algunos días para ' + data.estimated.join(', ')
+            + '. Esos días se valoran al precio de su última operación, así que su línea va plana.';
+        document.getElementById('estimatedAlert').classList.toggle('d-none', data.estimated.length === 0);
         const alert = document.getElementById('missingAlert');
-        alert.textContent = 'Sin precio algunos días para ' + data.missing.join(', ')
+        alert.textContent = 'Sin ningún precio algunos días para ' + data.missing.join(', ')
             + '. En esos días el valor sale corto y la gráfica marca una pérdida que no es real.';
         alert.classList.toggle('d-none', data.missing.length === 0);
 
         const sales = salesByDate(data.sales);
+        const step = tickMonths(pts.length);
         chart = new Chart(canvas, {
             type: 'line',
             data: {
@@ -217,7 +237,7 @@
                                 const p = pts[items[0].dataIndex];
                                 const gain = p.value - p.cost;
                                 return [(gain >= 0 ? 'Beneficio: ' : 'Pérdida: ') + signedEur(gain)]
-                                    .concat(p.complete ? [] : ['Falta el precio de algún valor']);
+                                    .concat(p.complete ? [] : ['Algún valor sin cotización ese día']);
                             }
                         }
                     }
@@ -227,16 +247,20 @@
                         grid: { display: false },
                         ticks: {
                             autoSkip: false, maxRotation: 0,
-                            // Una marca por mes, el día 1, en vez de las que caigan.
+                            // Marcas en días 1 de mes, en vez de las que caigan. Se cuentan los meses
+                            // desde el año cero para que un paso de 24 o 60 también caiga en enero.
                             callback: (v, i) => {
                                 const d = pts[i].date;
-                                const month = Number(d.slice(5, 7)) - 1;
-                                return d.endsWith('-01') && month % tickMonths[years] === 0
+                                const months = Number(d.slice(0, 4)) * 12 + Number(d.slice(5, 7)) - 1;
+                                return d.endsWith('-01') && months % step === 0
                                     ? mes.format(asDate(d)) : null;
                             }
                         }
                     },
-                    y: { ticks: { callback: v => eur0.format(v) } }
+                    // Desde cero, para que la altura de cada franja sea proporcional a lo que
+                    // mide: con el eje recortado, un 5 % de plusvalía parecía la mitad del valor.
+                    // El máximo lo pone Chart.js según los datos del periodo.
+                    y: { min: 0, ticks: { callback: v => eur0.format(v) } }
                 }
             },
             plugins: [saleLabels(sales)]
@@ -251,7 +275,7 @@
     function load(years) {
         // Si se pulsa otro periodo antes de que llegue el anterior, gana el último pulsado.
         const ticket = ++requested;
-        buttons.forEach(b => b.classList.toggle('active', Number(b.dataset.years) === years));
+        buttons.forEach(b => b.classList.toggle('active', b.dataset.years === years));
         if (chart) { chart.destroy(); chart = null; }
         document.getElementById('chart').classList.add('d-none');
         loading.innerHTML = loadingHtml;
@@ -264,8 +288,8 @@
             });
     }
 
-    buttons.forEach(b => b.addEventListener('click', () => load(Number(b.dataset.years))));
-    load(1);
+    buttons.forEach(b => b.addEventListener('click', () => load(b.dataset.years)));
+    load('1');
 </script>
 </body>
 </html>

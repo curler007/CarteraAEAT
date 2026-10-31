@@ -1,12 +1,17 @@
 package com.raul.bolsa;
 
+import com.raul.bolsa.domain.AeatGroup;
 import com.raul.bolsa.domain.AppUser;
+import com.raul.bolsa.domain.OperationType;
 import com.raul.bolsa.repository.AppUserRepository;
 import com.raul.bolsa.security.AppUserPrincipal;
+import com.raul.bolsa.service.OperationService;
+import com.raul.bolsa.web.dto.OperationForm;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInfo;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -19,6 +24,7 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.io.IOException;
+import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDate;
@@ -52,10 +58,15 @@ class ChartPageRenderTest {
 
     @Autowired MockMvc mvc;
     @Autowired AppUserRepository userRepo;
+    @Autowired OperationService operationService;
 
+    private Long uid;
+
+    /** Un usuario por método: comparten fichero de base de datos. */
     @BeforeEach
-    void setUp() {
-        AppUser user = TestUsers.create(userRepo, "chart");
+    void setUp(TestInfo info) {
+        AppUser user = TestUsers.create(userRepo, "chart-" + info.getTestMethod().orElseThrow().getName());
+        uid = user.getId();
         SecurityContextHolder.getContext().setAuthentication(
                 new UsernamePasswordAuthenticationToken(new AppUserPrincipal(user), null, List.of()));
     }
@@ -78,8 +89,8 @@ class ChartPageRenderTest {
 
         assertTrue(html.contains("fetch('/api/portfolio-history?years=' + years)"),
                 "falta la llamada que trae la serie");
-        for (int years : new int[]{1, 2, 5, 10}) {
-            assertTrue(html.contains("data-years=\"" + years + "\""), "falta el botón de " + years + " años");
+        for (String years : new String[]{"1", "2", "5", "10", "max"}) {
+            assertTrue(html.contains("data-years=\"" + years + "\""), "falta el botón de " + years);
         }
         assertTrue(html.trim().endsWith("</html>"), "la página se cortó a medias");
     }
@@ -95,6 +106,38 @@ class ChartPageRenderTest {
                     .andExpect(jsonPath("$.points.length()").value(days))
                     .andExpect(jsonPath("$.points[0].date").value(today.minusYears(years).toString()));
         }
+    }
+
+    @Test
+    @DisplayName("Todo empieza en la primera operación, sea de hace meses o de hace décadas")
+    void maxStartsAtTheFirstOperation() throws Exception {
+        LocalDate today = LocalDate.now();
+        // Sin operaciones no hay principio: sale el año por defecto.
+        mvc.perform(get("/api/portfolio-history").param("years", "max"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.points[0].date").value(today.minusYears(1).toString()));
+
+        // Un nombre que no es ISIN, para que valorarlo no salga a buscar a Yahoo.
+        operationService.save(uid, buy(LocalDate.parse("2003-02-17"), "SIN-COTIZACION"));
+        mvc.perform(get("/api/portfolio-history").param("years", "max"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.points[0].date").value("2003-02-17"))
+                .andExpect(jsonPath("$.points.length()")
+                        .value(ChronoUnit.DAYS.between(LocalDate.parse("2003-02-17"), today) + 1));
+    }
+
+    private static OperationForm buy(LocalDate date, String asset) {
+        OperationForm f = new OperationForm();
+        f.setDate(date);
+        f.setType(OperationType.BUY);
+        f.setTicker(asset);
+        f.setAssetName(asset);
+        f.setBroker("ING");
+        f.setQuantity(new BigDecimal("10"));
+        f.setTotal(new BigDecimal("100"));
+        f.setCommission(BigDecimal.ZERO);
+        f.setAeatGroup(AeatGroup.GROUP_2);
+        return f;
     }
 
     @Test

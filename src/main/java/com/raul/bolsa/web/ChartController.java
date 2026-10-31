@@ -27,23 +27,29 @@ public class ChartController {
     }
 
     /**
-     * La serie de los últimos {@code years} años. Va aparte de la página por lo mismo que
-     * {@code /api/period-basis}: necesita los históricos de Yahoo, y la página se pinta antes con
-     * la ruedita girando.
+     * La serie de los últimos {@code years} años, o desde la primera operación con {@code max}.
+     * Va aparte de la página por lo mismo que {@code /api/period-basis}: necesita los históricos
+     * de Yahoo, y la página se pinta antes con la ruedita girando.
      *
-     * <p>Solo las ventanas que ofrece la página. Yahoo se pide con once años de serie, así que
-     * cualquiera hasta diez cabría, pero cada año son 365 puntos más que valorar y pintar, y una
-     * ventana arbitraria en la URL no aporta nada.
+     * <p>Solo las ventanas que ofrece la página: cada año son 365 puntos más que valorar y pintar,
+     * y una ventana arbitraria en la URL no aporta nada.
      */
     @GetMapping("/api/portfolio-history")
     @ResponseBody
-    public PortfolioHistory history(@RequestParam(defaultValue = "1") int years) {
+    public PortfolioHistory history(@RequestParam(defaultValue = "1") String years) {
+        Long userId = currentUser.id();
+        LocalDate today = LocalDate.now();
+        if (MAX.equals(years)) {
+            // Sin operaciones no hay "desde el principio": se enseña el año por defecto, vacío.
+            LocalDate first = valuation.firstOperationDate(userId).orElse(today.minusYears(1));
+            return valuation.history(userId, first.isAfter(today) ? today : first, today);
+        }
         if (!WINDOWS.contains(years)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Ventana no admitida: " + years);
         }
-        LocalDate today = LocalDate.now();
-        return valuation.history(currentUser.id(), today.minusYears(years), today);
+        return valuation.history(userId, today.minusYears(Integer.parseInt(years)), today);
     }
 
-    private static final Set<Integer> WINDOWS = Set.of(1, 2, 5, 10);
+    private static final String MAX = "max";
+    private static final Set<String> WINDOWS = Set.of("1", "2", "5", "10");
 }

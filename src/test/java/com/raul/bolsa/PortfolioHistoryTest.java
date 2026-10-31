@@ -24,6 +24,7 @@ import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -151,16 +152,37 @@ class PortfolioHistoryTest {
     }
 
     @Test
-    @DisplayName("Un valor sin precio marca el día como incompleto y se nombra")
-    void missingPriceIsFlagged() {
+    @DisplayName("Sin cierre de Yahoo, el valor va al precio de su última operación")
+    void missingCloseFallsBackToLastTradePrice() {
         operationService.save(uid, form(OperationType.BUY, "2024-03-01", "IE00000000A1", "100", "900", null));
         operationService.save(uid, form(OperationType.BUY, "2025-05-01", "IE00000000Z9", "1", "50", null));
+        operationService.save(uid, form(OperationType.BUY, "2025-07-01", "IE00000000Z9", "1", "70", null));
 
         PortfolioHistory h = valuation.history(uid, DESDE, HASTA);
 
         assertTrue(point(h, "2025-04-30").complete());
+        PortfolioHistory.Point compra = point(h, "2025-05-01");
+        assertFalse(compra.complete(), "el día se marca: hay un valor sin cotización");
+        assertEq("1050", compra.value(), "A a 10 € y Z9 a lo que costó, en vez de a cero");
+        assertEq("1050", point(h, "2025-05-31").value(), "y sigue a ese precio mientras no haya otro");
+        assertEq("1340", point(h, "2025-07-01").value(),
+                "la segunda compra trae precio nuevo para los dos títulos: 2 × 70 € más A a 12 €");
+        assertEquals(List.of("IE00000000Z9"), h.estimated());
+        assertTrue(h.missing().isEmpty(), "valorado a precio de operación no es un hueco");
+    }
+
+    @Test
+    @DisplayName("Sin cierre ni operación con importe, el valor sí queda sin valorar")
+    void zeroCostWithoutCloseIsMissing() {
+        operationService.save(uid, form(OperationType.BUY, "2024-03-01", "IE00000000A1", "100", "900", null));
+        operationService.save(uid, form(OperationType.BUY, "2025-05-01", "IE00000000Z9", "1", "0", null));
+
+        PortfolioHistory h = valuation.history(uid, DESDE, HASTA);
+
         assertFalse(point(h, "2025-05-01").complete());
-        assertEquals(java.util.List.of("IE00000000Z9"), h.missing());
+        assertEq("1000", point(h, "2025-05-01").value(), "una compra a coste cero no dice cuánto vale");
+        assertEquals(List.of("IE00000000Z9"), h.missing());
+        assertTrue(h.estimated().isEmpty());
     }
 
     private static PortfolioHistory.Point point(PortfolioHistory h, String date) {

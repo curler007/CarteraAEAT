@@ -102,6 +102,8 @@ public class PortfolioValuationService {
         Map<Long, BigDecimal> costBySell = sumBySell(records, SaleRecord::getCostBasis);
 
         Map<String, BigDecimal> held = new HashMap<>();
+        Map<String, BigDecimal> lastTradePrice = new HashMap<>();
+        Set<String> estimated = new TreeSet<>();
         Set<String> missing = new TreeSet<>();
         List<PortfolioHistory.Point> points = new ArrayList<>();
         BigDecimal cost = BigDecimal.ZERO;
@@ -117,6 +119,11 @@ public class PortfolioValuationService {
                         splits.getOrDefault(op.getTicker().toUpperCase(), List.of()), op.getDate(), today));
                 held.merge(op.getAssetName(), op.getType().reducesPosition() ? qty.negate() : qty,
                         BigDecimal::add);
+                // Precio por título, en las acciones de hoy como la cantidad. Sin importe no hay
+                // precio: una compra a coste cero diría que el valor no vale nada.
+                if (amount(op).signum() > 0 && qty.signum() > 0) {
+                    lastTradePrice.put(op.getAssetName(), amount(op).divide(qty, 6, RoundingMode.HALF_UP));
+                }
                 flow = flow.add(costChange(op, costBySell));
             }
 
@@ -127,6 +134,14 @@ public class PortfolioValuationService {
                 String isin = position.getKey();
                 String symbol = symbols.computeIfAbsent(isin, k -> symbolOf(historic, userId, k));
                 BigDecimal eur = symbol == null ? null : valueOf(historic, symbol, position.getValue(), day);
+                if (eur == null && lastTradePrice.containsKey(isin)) {
+                    // Sin cierre de Yahoo, el precio de su última operación: es un precio de
+                    // mercado de verdad, solo que más viejo. Dejarlo fuera pintaba una pérdida
+                    // del tamaño entero de la posición; así, a lo sumo, se queda plano.
+                    eur = position.getValue().multiply(lastTradePrice.get(isin));
+                    estimated.add(names.getOrDefault(isin, isin));
+                    complete = false;
+                }
                 if (eur == null) {
                     complete = false;
                     missing.add(names.getOrDefault(isin, isin));
@@ -142,8 +157,15 @@ public class PortfolioValuationService {
             cost = cost.add(flow);
             points.add(new PortfolioHistory.Point(day.toString(), scaled(value), scaled(cost), complete));
         }
-        return new PortfolioHistory(points, List.copyOf(missing),
+        return new PortfolioHistory(points, List.copyOf(estimated), List.copyOf(missing),
                 salesBetween(operations, sumBySell(records, SaleRecord::getGainLoss), from, to));
+    }
+
+    /** Fecha de la operación más antigua del inversor, o vacío si no tiene ninguna. */
+    public Optional<LocalDate> firstOperationDate(Long userId) {
+        return operationRepo.findByUserId(userId).stream()
+                .map(Operation::getDate)
+                .min(Comparator.naturalOrder());
     }
 
     /**

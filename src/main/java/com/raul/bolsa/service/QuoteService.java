@@ -49,14 +49,13 @@ public class QuoteService {
      * Query para valorar la cartera en fechas pasadas. Va aparte de la del dashboard, que se pide
      * una vez por posición en cada carga: aquí interesa alcance y allí ligereza.
      *
-     * <p>Once años y no diez, por lo mismo que la del dashboard pide dos: la gráfica llega a diez
-     * años atrás, y con {@code range=10y} su primera sesión ya caía después de esa fecha y los
-     * primeros días de la ventana se quedaban sin precio. Se pide por fechas porque Yahoo no
-     * acepta {@code range=11y}.
+     * <p>La serie entera, porque la gráfica puede llegar hasta la primera operación, que en una
+     * cartera vieja son décadas. Se pide por fechas desde 1970 y no con {@code range=max}: con ese
+     * rango Yahoo baja la resolución a un punto cada tres meses aunque se le pida {@code 1d}, y por
+     * fechas devuelve los cierres diarios de toda la vida del valor.
      */
     private static String historicChartQuery() {
-        long from = LocalDate.now().minusYears(11).atStartOfDay(ZoneOffset.UTC).toEpochSecond();
-        return "interval=1d&period1=" + from + "&period2=" + Instant.now().getEpochSecond();
+        return "interval=1d&period1=0&period2=" + Instant.now().getEpochSecond();
     }
 
 
