@@ -185,6 +185,68 @@ class PortfolioHistoryTest {
         assertTrue(h.estimated().isEmpty());
     }
 
+    @Test
+    @DisplayName("El desglose da franja a quien estuvo entre los mayores algún día, y suma el total")
+    void breakdownAddsUpToTheValue() {
+        operationService.save(uid, form(OperationType.BUY, "2024-03-01", "IE00000000A1", "100", "900", null));
+        operationService.save(uid, form(OperationType.BUY, "2024-03-01", "IE00000000B2", "10", "200", null));
+        operationService.save(uid, form(OperationType.BUY, "2025-05-01", "IE00000000Z9", "1", "50", null));
+        operationService.save(uid, form(OperationType.SELL, "2025-09-10", "IE00000000B2", "10", "200", null));
+
+        assertTrue(valuation.history(uid, DESDE, HASTA).breakdown().isEmpty(), "sin pedirlo no viene");
+        PortfolioHistory h = valuation.history(uid, DESDE, HASTA, true);
+
+        assertEquals(List.of("IE00000000A1", "IE00000000Z9", "IE00000000B2", "Resto"),
+                h.breakdown().stream().map(PortfolioHistory.Holding::name).toList(),
+                "primero lo que hay hoy, de mayor a menor; luego lo vendido, que también tuvo su peso");
+        PortfolioHistory.Holding a = h.breakdown().get(0), b = h.breakdown().get(2),
+                resto = h.breakdown().get(3);
+        int antesVenta = h.points().indexOf(point(h, "2025-09-09"));
+        assertEq("1200", a.values().get(antesVenta));
+        assertEq("200", b.values().get(antesVenta));
+        assertEq("0", b.values().get(antesVenta + 1), "tras venderlo su franja se cierra");
+        assertEq("0", resto.values().get(antesVenta), "con tres valores no queda nada para el resto");
+        assertEq("0", h.breakdown().get(1).values().get(0), "Z9 aún no se había comprado");
+        assertEq("900", a.costs().get(antesVenta), "lo que costó A, que no se ha tocado");
+        assertEq("200", b.costs().get(antesVenta));
+        assertEq("0", b.costs().get(antesVenta + 1), "vendido entero, ya no cuesta nada");
+
+        for (int i = 0; i < h.points().size(); i++) {
+            int day = i;
+            BigDecimal suma = h.breakdown().stream().map(x -> x.values().get(day))
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            assertEq(h.points().get(i).value().toPlainString(), suma, "día " + h.points().get(i).date());
+            BigDecimal costes = h.breakdown().stream().map(x -> x.costs().get(day))
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            assertEq(h.points().get(i).cost().toPlainString(), costes,
+                    "los costes suman el de la cartera, día " + h.points().get(i).date());
+        }
+    }
+
+    @Test
+    @DisplayName("En el desglose, el coste de un traspaso sale de un fondo y entra en el otro")
+    void breakdownMovesCostWithTransfers() {
+        operationService.save(uid, form(OperationType.BUY, "2024-03-01", "IE00000000B2", "30", "450", null));
+        operationService.save(uid, form(OperationType.BUY, "2024-06-01", "IE00000000B2", "20", "550", null));
+        // Sale la mitad de lo que hay; por FIFO se lleva los 30 primeros, que costaron 450 €.
+        operationService.save(uid, form(OperationType.TRASPASO_OUT, "2025-03-10", "IE00000000B2", "25", "500", "T1"));
+        operationService.save(uid, form(OperationType.TRASPASO_IN, "2025-03-14", "IE00000000A1", "50", "500", "T1"));
+
+        PortfolioHistory h = valuation.history(uid, DESDE, HASTA, true);
+
+        PortfolioHistory.Holding b = h.breakdown().stream()
+                .filter(x -> "IE00000000B2".equals(x.isin())).findFirst().orElseThrow();
+        PortfolioHistory.Holding a = h.breakdown().stream()
+                .filter(x -> "IE00000000A1".equals(x.isin())).findFirst().orElseThrow();
+        int antes = h.points().indexOf(point(h, "2025-03-09"));
+        int llegada = h.points().indexOf(point(h, "2025-03-14"));
+        assertEq("1000", b.costs().get(antes));
+        assertEq("625", b.costs().get(antes + 1),
+                "por FIFO salen 25 de los primeros 30, a 15 € cada uno: quedan 1000 − 375");
+        assertEq("375", a.costs().get(llegada), "y eso es lo que cuesta lo que llega al destino");
+        assertEq("0", a.costs().get(llegada - 1), "antes de llegar, el destino no cuesta nada");
+    }
+
     private static PortfolioHistory.Point point(PortfolioHistory h, String date) {
         return h.points().stream().filter(p -> p.date().equals(date)).findFirst().orElseThrow();
     }

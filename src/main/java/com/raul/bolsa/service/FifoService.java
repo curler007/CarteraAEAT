@@ -340,7 +340,11 @@ public class FifoService {
                 .filter(op -> op.getType() == OperationType.TRASPASO_OUT)
                 .forEach(op -> {
                     op.setPendingQty(ZERO);
+                    int from = pot.size();
                     processTransferOut(op, pot);
+                    op.setTransferCost(pot.subList(from, pot.size()).stream()
+                            .map(CostFragment::cost).reduce(ZERO, BigDecimal::add));
+                    operationRepo.save(op);
                 });
 
         List<Operation> incoming = event.stream()

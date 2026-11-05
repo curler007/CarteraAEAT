@@ -108,6 +108,15 @@ public class Operation {
     @Column(precision = 20, scale = 8)
     private BigDecimal pendingQty;
 
+    /**
+     * Para salidas de traspaso: coste FIFO que se llevó al fondo de destino. Lo apunta el FIFO al
+     * procesar el traspaso y no se puede deducir después: el coste de varias salidas se junta en
+     * un bote antes de repartirse entre las entradas. Sirve para saber cuánto costaba lo que
+     * quedaba en cada fondo día a día. null en el resto de operaciones.
+     */
+    @Column(precision = 20, scale = 6)
+    private BigDecimal transferCost;
+
     /** Usado en la vista para evitar lógica en el template. */
     public boolean isPending() {
         return pendingQty != null && pendingQty.compareTo(BigDecimal.ZERO) > 0;

@@ -4,6 +4,8 @@ import com.raul.bolsa.domain.Operation;
 import com.raul.bolsa.domain.OperationType;
 import com.raul.bolsa.domain.SaleRecord;
 import com.raul.bolsa.domain.Split;
+import com.raul.bolsa.domain.FifoLot;
+import com.raul.bolsa.repository.FifoLotRepository;
 import com.raul.bolsa.repository.OperationRepository;
 import com.raul.bolsa.repository.SaleRecordRepository;
 import com.raul.bolsa.repository.SplitRepository;
@@ -19,12 +21,16 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
@@ -49,6 +55,7 @@ public class PortfolioValuationService {
     private final OperationRepository operationRepo;
     private final SplitRepository splitRepo;
     private final SaleRecordRepository saleRecordRepo;
+    private final FifoLotRepository fifoLotRepo;
     private final SplitService splitService;
     private final QuoteService quoteService;
     private final IsinTwinService twinService;
@@ -88,6 +95,31 @@ public class PortfolioValuationService {
      * pero hecha 366 veces se notaba.
      */
     public PortfolioHistory history(Long userId, LocalDate from, LocalDate to) {
+        return history(userId, from, to, false);
+    }
+
+    /** Puesto que hay que alcanzar algún día de la ventana para tener franja propia. */
+    static final int BREAKDOWN_TOP = 9;
+
+    /**
+     * Franjas propias como mucho, por colores: más allá no se distinguen. Con los de "Todo" en una
+     * cartera que ha rotado mucho se llega; lo que no quepa va al resto, empezando por lo que
+     * menos llegó a valer.
+     */
+    static final int BREAKDOWN_MAX = 16;
+
+    /**
+     * Igual, y con {@code breakdown} además el valor de cada día repartido entre los valores que
+     * algún día de la ventana estuvieron entre los {@value #BREAKDOWN_TOP} mayores, y el resto.
+     *
+     * <p>Basta con haberlo estado un día y no hace falta seguir hoy: un fondo que pesó un 20 % y
+     * luego se traspasó explica parte de la curva igual que el que entró en su lugar. El orden es
+     * fijo en toda la ventana —primero lo que más vale hoy, luego lo que ya no está, por lo que
+     * llegó a valer—, porque reordenar por días haría saltar las franjas de sitio. El dinero en
+     * tránsito y los valores pequeños van al resto, que se calcula como lo que falta hasta el
+     * total: así las franjas suman la línea del valor al céntimo.
+     */
+    public PortfolioHistory history(Long userId, LocalDate from, LocalDate to, boolean breakdown) {
         List<Operation> operations = operationRepo.findByUserId(userId).stream()
                 .sorted(Comparator.comparing(Operation::getDate).thenComparing(Operation::getId,
                         Comparator.nullsLast(Comparator.naturalOrder())))
@@ -108,6 +140,13 @@ public class PortfolioValuationService {
         List<PortfolioHistory.Point> points = new ArrayList<>();
         BigDecimal cost = BigDecimal.ZERO;
         int next = 0;
+        int days = (int) ChronoUnit.DAYS.between(from, to) + 1;
+        Map<String, BigDecimal[]> byIsin = new HashMap<>();
+        // Lo que costaba lo que quedaba de cada valor, para partir su franja en invertido y
+        // beneficio. Solo hace falta con el desglose.
+        Map<String, BigDecimal> heldCost = new HashMap<>();
+        Map<String, BigDecimal[]> costByIsin = new HashMap<>();
+        Map<Long, BigDecimal> costByTransferIn = breakdown ? costByTransferIn(userId) : Map.of();
 
         for (LocalDate day = from; !day.isAfter(to); day = day.plusDays(1)) {
             // Lo que cambió el coste ese día. El primero arrastra además todo lo anterior a la
@@ -125,6 +164,15 @@ public class PortfolioValuationService {
                     lastTradePrice.put(op.getAssetName(), amount(op).divide(qty, 6, RoundingMode.HALF_UP));
                 }
                 flow = flow.add(costChange(op, costBySell));
+                if (breakdown) {
+                    heldCost.merge(op.getAssetName(), heldCostChange(op, costBySell, costByTransferIn),
+                            BigDecimal::add);
+                }
+            }
+            if (breakdown) {
+                int day0 = points.size();
+                heldCost.forEach((isin, c) ->
+                        costByIsin.computeIfAbsent(isin, k -> new BigDecimal[days])[day0] = c);
             }
 
             BigDecimal value = BigDecimal.ZERO;
@@ -147,6 +195,9 @@ public class PortfolioValuationService {
                     missing.add(names.getOrDefault(isin, isin));
                 } else {
                     value = value.add(eur);
+                    if (breakdown) {
+                        byIsin.computeIfAbsent(isin, k -> new BigDecimal[days])[points.size()] = eur;
+                    }
                 }
             }
             // Sin el dinero que viaja entre fondos, cada traspaso abriría un hueco rojo de su
@@ -158,7 +209,94 @@ public class PortfolioValuationService {
             points.add(new PortfolioHistory.Point(day.toString(), scaled(value), scaled(cost), complete));
         }
         return new PortfolioHistory(points, List.copyOf(estimated), List.copyOf(missing),
-                salesBetween(operations, sumBySell(records, SaleRecord::getGainLoss), from, to));
+                salesBetween(operations, sumBySell(records, SaleRecord::getGainLoss), from, to),
+                breakdown ? breakdownOf(byIsin, costByIsin, points, names) : List.of());
+    }
+
+    /**
+     * Lo que una operación cambia el coste de lo que queda de su valor. Como {@link #costChange},
+     * pero mirando cada fondo y no la cartera: ahí un traspaso no movía nada porque el coste salía
+     * de un fondo y entraba en otro, y aquí hay que apuntar las dos mitades. La salida se lleva lo
+     * que el FIFO apuntó en ella, y la entrada recibe lo que costaron sus lotes.
+     *
+     * <p>Un canje reparte el coste entre los lotes del mismo valor, así que no cambia su total.
+     */
+    private static BigDecimal heldCostChange(Operation op, Map<Long, BigDecimal> costBySell,
+                                             Map<Long, BigDecimal> costByTransferIn) {
+        return switch (op.getType()) {
+            case BUY -> amount(op);
+            case SELL -> costBySell.getOrDefault(op.getId(), BigDecimal.ZERO).negate();
+            case TRASPASO_OUT -> op.getTransferCost() == null ? BigDecimal.ZERO : op.getTransferCost().negate();
+            case TRASPASO_IN -> costByTransferIn.getOrDefault(op.getId(), BigDecimal.ZERO);
+            default -> BigDecimal.ZERO;
+        };
+    }
+
+    /** Coste con el que entró cada entrada de traspaso: la suma de los lotes que creó. */
+    private Map<Long, BigDecimal> costByTransferIn(Long userId) {
+        return fifoLotRepo.findByUserId(userId).stream()
+                .filter(lot -> lot.getOperation().getType() == OperationType.TRASPASO_IN)
+                .collect(Collectors.groupingBy(lot -> lot.getOperation().getId(),
+                        Collectors.reducing(BigDecimal.ZERO, FifoLot::getInitialCost, BigDecimal::add)));
+    }
+
+    private List<PortfolioHistory.Holding> breakdownOf(Map<String, BigDecimal[]> byIsin,
+                                                       Map<String, BigDecimal[]> costByIsin,
+                                                       List<PortfolioHistory.Point> points,
+                                                       Map<String, String> names) {
+        int lastDay = points.size() - 1;
+        Set<String> chosen = new HashSet<>();
+        for (int i = 0; i < points.size(); i++) {
+            int day = i;
+            byIsin.entrySet().stream()
+                    .filter(e -> e.getValue()[day] != null && e.getValue()[day].signum() > 0)
+                    .sorted(Comparator.comparing((Map.Entry<String, BigDecimal[]> e) -> e.getValue()[day])
+                            .reversed())
+                    .limit(BREAKDOWN_TOP)
+                    .forEach(e -> chosen.add(e.getKey()));
+        }
+        Function<String, BigDecimal> today = isin -> Optional.ofNullable(byIsin.get(isin)[lastDay])
+                .orElse(BigDecimal.ZERO);
+        Function<String, BigDecimal> peak = isin -> Arrays.stream(byIsin.get(isin))
+                .filter(Objects::nonNull).max(Comparator.naturalOrder()).orElse(BigDecimal.ZERO);
+        // Si no caben todos, se quedan los que más llegaron a valer, no los que más valen hoy: un
+        // valor vendido que pesaba miles de euros explica la curva mucho más que uno de cien que
+        // sigue en cartera, y mandarlo al resto lo hacía crecer como si fuera calderilla.
+        List<String> top = chosen.stream()
+                .sorted(Comparator.comparing(peak).reversed().thenComparing(Comparator.naturalOrder()))
+                .limit(BREAKDOWN_MAX)
+                .sorted(Comparator.comparing(today).thenComparing(peak).reversed()
+                        .thenComparing(Comparator.naturalOrder()))
+                .toList();
+
+        List<PortfolioHistory.Holding> out = new ArrayList<>();
+        BigDecimal[] rest = new BigDecimal[points.size()];
+        BigDecimal[] restCost = new BigDecimal[points.size()];
+        for (int i = 0; i < rest.length; i++) {
+            rest[i] = points.get(i).value();
+            restCost[i] = points.get(i).cost();
+        }
+        BigDecimal[] none = new BigDecimal[points.size()];
+        for (String isin : top) {
+            List<BigDecimal> values = new ArrayList<>(rest.length);
+            List<BigDecimal> costs = new ArrayList<>(rest.length);
+            BigDecimal[] daily = byIsin.get(isin);
+            BigDecimal[] dailyCost = costByIsin.getOrDefault(isin, none);
+            for (int i = 0; i < rest.length; i++) {
+                BigDecimal eur = daily[i] == null ? BigDecimal.ZERO : scaled(daily[i]);
+                // Lo vendido entero deja céntimos de redondeo en el coste: sin títulos no hay coste.
+                BigDecimal c = daily[i] == null || dailyCost[i] == null ? BigDecimal.ZERO : scaled(dailyCost[i]);
+                values.add(eur);
+                costs.add(c);
+                rest[i] = rest[i].subtract(eur);
+                restCost[i] = restCost[i].subtract(c);
+            }
+            out.add(new PortfolioHistory.Holding(names.getOrDefault(isin, isin), isin, values, costs));
+        }
+        // El resto se queda con lo que falta hasta el coste de la cartera: incluye el de los
+        // valores pequeños y el del dinero que viaja entre fondos, que no está en ninguno.
+        out.add(new PortfolioHistory.Holding("Resto", null, List.of(rest), List.of(restCost)));
+        return out;
     }
 
     /** Fecha de la operación más antigua del inversor, o vacío si no tiene ninguna. */

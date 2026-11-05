@@ -3,6 +3,7 @@ package com.raul.bolsa.config;
 import com.raul.bolsa.domain.AppUser;
 import com.raul.bolsa.domain.Role;
 import com.raul.bolsa.repository.AppUserRepository;
+import com.raul.bolsa.service.FifoService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -28,6 +29,8 @@ import java.util.UUID;
  *   <li>Asigna a ese administrador todas las filas que aún no tienen propietario.</li>
  *   <li>Pone identidad estable a las operaciones que se crearon antes de que existiera, para
  *       que salgan en el CSV y reimportarlas no las duplique.</li>
+ *   <li>Recalcula el FIFO de quien tenga salidas de traspaso sin su coste apuntado, que son las
+ *       procesadas antes de que existiera la columna.</li>
  * </ol>
  */
 @Component
@@ -41,6 +44,7 @@ public class LegacyDataMigration implements ApplicationRunner {
     private final AppUserRepository userRepo;
     private final PasswordEncoder passwordEncoder;
     private final JdbcTemplate jdbc;
+    private final FifoService fifoService;
 
     @Value("${app.security.username}")
     private String seedUsername;
@@ -54,6 +58,24 @@ public class LegacyDataMigration implements ApplicationRunner {
         AppUser admin = ensureInitialAdmin();
         adoptOrphanRows(admin);
         assignMissingUids();
+        backfillTransferCosts();
+    }
+
+    /**
+     * El coste que se llevó cada salida de traspaso solo lo conoce el FIFO mientras lo procesa, así
+     * que para las anteriores a la columna no hay otra que volver a pasarlo. Es el mismo
+     * recálculo que hace guardar cualquier traspaso, y deja apuntado el dato en todas.
+     */
+    private void backfillTransferCosts() {
+        List<Long> users = jdbc.queryForList(
+                "SELECT DISTINCT user_id FROM operations "
+                        + "WHERE type = 'TRASPASO_OUT' AND transfer_cost IS NULL AND user_id IS NOT NULL",
+                Long.class);
+        for (Long userId : users) {
+            fifoService.recalculateAll(userId);
+            log.info("FIFO recalculado para el usuario {}: apunta el coste de cada salida de traspaso",
+                    userId);
+        }
     }
 
     /**

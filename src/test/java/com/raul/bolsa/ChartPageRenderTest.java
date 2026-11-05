@@ -87,7 +87,7 @@ class ChartPageRenderTest {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
 
-        assertTrue(html.contains("fetch('/api/portfolio-history?years=' + years)"),
+        assertTrue(html.contains("fetch('/api/portfolio-history?years=' + years"),
                 "falta la llamada que trae la serie");
         for (String years : new String[]{"1", "2", "5", "10", "max"}) {
             assertTrue(html.contains("data-years=\"" + years + "\""), "falta el botón de " + years);
