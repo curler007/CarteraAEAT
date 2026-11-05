@@ -599,6 +599,19 @@
                 animation: false,
                 layout: { padding: { top: 18 } },
                 interaction: { mode: 'index', intersect: false },
+                // Pulsar una franja la resalta igual que su nombre en la leyenda; pulsarla otra vez,
+                // o fuera de las franjas, lo quita. En el móvil es tocarla.
+                onClick: (e, items, ch) => {
+                    if (!withBands || items.length === 0) return;
+                    const h = bandUnderPointer(ch, items[0].index);
+                    const ds = h ? ch.data.datasets.find(d => d.holding === h) : null;
+                    setHighlight(ds && ds !== highlighted ? ds : null);
+                },
+                onHover: (e, items, ch) => {
+                    if (!withBands) return;
+                    const over = items.length > 0 && bandUnderPointer(ch, items[0].index);
+                    ch.canvas.style.cursor = over ? 'pointer' : '';
+                },
                 plugins: {
                     legend: { display: false },
                     tooltip: {
