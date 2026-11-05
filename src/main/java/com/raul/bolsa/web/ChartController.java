@@ -33,21 +33,25 @@ public class ChartController {
      *
      * <p>Solo las ventanas que ofrece la página: cada año son 365 puntos más que valorar y pintar,
      * y una ventana arbitraria en la URL no aporta nada.
+     *
+     * <p>El desglose por valor solo va si se pide: con diez años son diez series de 3.650 puntos,
+     * y la gráfica normal no tiene por qué cargarlas.
      */
     @GetMapping("/api/portfolio-history")
     @ResponseBody
-    public PortfolioHistory history(@RequestParam(defaultValue = "1") String years) {
+    public PortfolioHistory history(@RequestParam(defaultValue = "1") String years,
+                                    @RequestParam(defaultValue = "false") boolean breakdown) {
         Long userId = currentUser.id();
         LocalDate today = LocalDate.now();
         if (MAX.equals(years)) {
             // Sin operaciones no hay "desde el principio": se enseña el año por defecto, vacío.
             LocalDate first = valuation.firstOperationDate(userId).orElse(today.minusYears(1));
-            return valuation.history(userId, first.isAfter(today) ? today : first, today);
+            return valuation.history(userId, first.isAfter(today) ? today : first, today, breakdown);
         }
         if (!WINDOWS.contains(years)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Ventana no admitida: " + years);
         }
-        return valuation.history(userId, today.minusYears(Integer.parseInt(years)), today);
+        return valuation.history(userId, today.minusYears(Integer.parseInt(years)), today, breakdown);
     }
 
     private static final String MAX = "max";

@@ -18,9 +18,11 @@ import java.util.List;
  *                cierre ni operación con importe. En esos días el valor sale corto y la gráfica
  *                pinta una pérdida que no existe
  * @param sales   las ventas de la ventana, para marcar en la gráfica el beneficio que se llevan
+ * @param breakdown el valor repartido entre los mayores valores de hoy y el resto, un importe por
+ *                  punto; vacío si no se pidió
  */
 public record PortfolioHistory(List<Point> points, List<String> estimated, List<String> missing,
-                               List<Sale> sales) {
+                               List<Sale> sales, List<Holding> breakdown) {
 
     /**
      * @param cost     lo que costó lo que había en cartera ese día
@@ -33,4 +35,14 @@ public record PortfolioHistory(List<Point> points, List<String> estimated, List<
      * @param gainLoss su resultado según el FIFO, el mismo que se declara
      */
     public record Sale(String date, String ticker, BigDecimal proceeds, BigDecimal gainLoss) {}
+
+    /**
+     * Lo que valió un valor cada día de la ventana, alineado con {@code points}. El último del
+     * desglose es el resto, y entre todos suman el valor de la cartera de cada día.
+     *
+     * @param isin   null en el resto
+     * @param costs  lo que costaba ese mismo día lo que quedaba del valor; entre todos suman el
+     *               coste de la cartera. La diferencia con {@code values} es su beneficio
+     */
+    public record Holding(String name, String isin, List<BigDecimal> values, List<BigDecimal> costs) {}
 }

@@ -9,12 +9,23 @@
     .chart-box { position: relative; height: 60vh; min-height: 320px; }
     .legend-swatch { display: inline-block; width: .8rem; height: .8rem; border-radius: 2px;
                      vertical-align: -.05rem; margin-right: .3rem; }
+    .band-legend { font-size: .8rem; }
+    .band-legend li { display: flex; align-items: baseline; gap: .4rem; padding: .1rem .3rem;
+                      margin: 0 -.3rem; border-radius: .25rem; cursor: pointer; }
+    .band-legend li.active { background: rgba(33,37,41,.08); font-weight: 600; }
+    .band-legend .legend-swatch { flex: none; margin-right: 0; }
+    .band-legend .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>
 
 <div class="container-fluid px-4">
 
     <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
         <h4 class="mb-0"><i class="bi bi-graph-up me-2"></i>Evolución de la cartera</h4>
+        <div class="d-flex flex-wrap align-items-center gap-3">
+        <div class="form-check form-switch mb-0 small">
+            <input class="form-check-input" type="checkbox" role="switch" id="breakdownSwitch">
+            <label class="form-check-label" for="breakdownSwitch">Desglose por valor</label>
+        </div>
         <div class="btn-group btn-group-sm" role="group" aria-label="Periodo de la gráfica">
             <button type="button" class="btn btn-outline-secondary active" data-years="1">1 año</button>
             <button type="button" class="btn btn-outline-secondary" data-years="2">2 años</button>
@@ -22,6 +33,7 @@
             <button type="button" class="btn btn-outline-secondary" data-years="10">10 años</button>
             <button type="button" class="btn btn-outline-secondary" data-years="max"
                     title="Desde la primera operación registrada">Todo</button>
+        </div>
         </div>
     </div>
 
@@ -63,20 +75,45 @@
     <div class="card shadow-sm mb-4">
         <div class="card-body">
             <div class="small text-muted mb-2">
+                <span id="legendNormal">
                 <span class="legend-swatch" style="background: rgba(13,110,253,.35)"></span>Coste de lo que tienes
                 <span class="legend-swatch ms-3" style="background: rgba(25,135,84,.45)"></span>Beneficio
                 <span class="legend-swatch ms-3" style="background: rgba(220,53,69,.45)"></span>Pérdida
                 <span class="legend-swatch ms-3" style="background: #212529; height: .2rem; vertical-align: .2rem"></span>Valor de la cartera
+                </span>
+                <span id="legendBands" class="d-none">
+                <span class="legend-swatch" style="background: linear-gradient(#a9c9ef 0 50%, #2a78d6 50%)"></span>Parte clara de cada franja: su beneficio
+                <span class="legend-swatch ms-3" style="background: #dc3545; height: .2rem; vertical-align: .2rem"></span>Filo rojo: en pérdidas
+                <span class="ms-3"></span>
+                <span class="legend-swatch" style="background: repeating-linear-gradient(90deg, #212529 0 4px, transparent 4px 7px); height: .15rem; vertical-align: .2rem"></span>Coste de lo que tienes
+                <span class="legend-swatch ms-3" style="background: #212529; height: .2rem; vertical-align: .2rem"></span>Valor de la cartera
+                </span>
                 <span class="ms-3">▼</span> Venta, con su resultado
             </div>
-            <div class="chart-box">
-                <div id="chartLoading" class="text-muted small">
-                    <span class="spinner-border spinner-border-sm text-secondary loading-spin" role="status"
-                          aria-label="Cargando"></span> Cargando cotizaciones…
+            <div class="row g-3">
+                <div class="col" id="chartCol">
+                    <div class="chart-box">
+                        <div id="chartLoading" class="text-muted small">
+                            <span class="spinner-border spinner-border-sm text-secondary loading-spin" role="status"
+                                  aria-label="Cargando"></span> Cargando cotizaciones…
+                        </div>
+                        <canvas id="chart" class="d-none"></canvas>
+                    </div>
                 </div>
-                <canvas id="chart" class="d-none"></canvas>
+                <div class="col-lg-3 d-none" id="bandLegendCol">
+                    <ul class="band-legend list-unstyled mb-0" id="bandLegend"></ul>
+                </div>
             </div>
-            <p class="small text-muted mt-2 mb-0">
+            <p class="small text-muted mt-2 mb-0 d-none" id="noteBands">
+                Cada color es lo que valía ese valor cada día, apilado sobre los demás en el mismo
+                orden toda la ventana: abajo lo que más vale hoy. Tiene franja propia todo lo que
+                algún día estuvo entre los nueve mayores, aunque ya no esté; lo demás va al resto,
+                en gris. Dentro de cada franja, la parte en su color es lo que costó lo que queda y
+                la parte clara de encima, lo que ha ganado. Una pérdida no cabe dentro, porque la
+                franja mide lo que vale; esos días lleva un filo rojo. Pasa el ratón por una franja
+                para ver sus cifras. La línea a trazos es lo que te costó lo que tienes.
+            </p>
+            <p class="small text-muted mt-2 mb-0" id="noteNormal">
                 El azul es lo que te costó lo que tienes cada día, como en la tarjeta Global: sube
                 con cada compra y al vender baja por el coste de lo vendido. Los traspasos entre
                 fondos no lo mueven. La distancia entre las dos curvas es la plusvalía latente; al
@@ -147,6 +184,333 @@
         }
     });
 
+    /**
+     * El desglose por valor, como franjas de color apiladas bajo la línea del valor: la de cada
+     * valor encima de la anterior, el mayor de hoy abajo y el resto en gris arriba del todo. El
+     * orden es el mismo en toda la ventana, lo fija el servidor.
+     *
+     * <p>Los ocho colores son los de la paleta, y no se inventan más: cuando no llegan se repiten
+     * los mismos con rayas diagonales. Se reparten por quién coincide en el tiempo y no por el
+     * puesto en la pila: dos valores que estuvieron a la vez en cartera no comparten tono mientras
+     * quede alguno libre, aunque entre ellos haya franjas, porque las que valen cero ese día no se
+     * ven y los dos quedan pegados. Uno vendido en 2024 y otro comprado en 2026 sí pueden.
+     */
+    const PALETTE = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6', '#e34948'];
+    const REST_COLOR = '#adb5bd';
+
+    function striped(color) {
+        const tile = document.createElement('canvas');
+        tile.width = tile.height = 8;
+        const c = tile.getContext('2d');
+        c.fillStyle = color;
+        c.fillRect(0, 0, 8, 8);
+        c.strokeStyle = 'rgba(255,255,255,.55)';
+        c.lineWidth = 2;
+        c.beginPath();
+        c.moveTo(-2, 10); c.lineTo(10, -2);
+        c.moveTo(-2, 2); c.lineTo(2, -2);
+        c.moveTo(6, 10); c.lineTo(10, 6);
+        c.stroke();
+        return c.createPattern(tile, 'repeat');
+    }
+
+    /** El color mezclado con blanco: es el de la parte de la franja que es beneficio. */
+    function tint(hex, white = 0.6) {
+        const n = parseInt(hex.slice(1), 16);
+        const mix = c => Math.round(c + (255 - c) * white);
+        return 'rgb(' + mix(n >> 16) + ',' + mix((n >> 8) & 255) + ',' + mix(n & 255) + ')';
+    }
+
+    /**
+     * Un estilo de franja: el relleno de lo invertido, el de lo ganado —el mismo, aclarado— y el
+     * fondo CSS de la muestra de la leyenda.
+     */
+    function bandStyle(style) {
+        const color = PALETTE[style % PALETTE.length];
+        const css = 'repeating-linear-gradient(135deg, ' + color + ' 0 3px, rgba(255,255,255,.55) 3px 5px), ' + color;
+        const fills = c => style < PALETTE.length ? { fill: c, light: tint(c) }
+                                                  : { fill: striped(c), light: striped(tint(c)) };
+        return Object.assign(fills(color), { css: style < PALETTE.length ? color : css,
+                                             muted: fills(muted(color)) });
+    }
+
+    /**
+     * El color con la saturación rebajada, para las franjas que no se están mirando: se acerca al
+     * gris de su misma luminosidad sin llegar a él, así sigue reconociéndose cuál es cuál.
+     */
+    function muted(hex, keep = 0.35) {
+        const n = parseInt(hex.slice(1), 16);
+        const r = n >> 16, g = (n >> 8) & 255, b = n & 255;
+        const gray = 0.299 * r + 0.587 * g + 0.114 * b;
+        const mix = c => Math.round(gray + (c - gray) * keep);
+        return '#' + [mix(r), mix(g), mix(b)].map(c => c.toString(16).padStart(2, '0')).join('');
+    }
+
+    /**
+     * Estilo de cada franja, sin contar el resto: de la más baja a la más alta, el primero que
+     * cumpla lo más exigente posible frente a las que coinciden con ella algún día. Primero, un
+     * tono que no use ninguna; si no queda, un estilo libre cuyo tono no sea el de sus vecinas en
+     * la pila; y si tampoco, cualquier estilo libre.
+     */
+    function bandStyles(holdings) {
+        const alive = holdings.map(h => h.values.map(v => Math.abs(v) >= 0.005));
+        const overlaps = (a, b) => alive[a].some((x, i) => x && alive[b][i]);
+        const styles = [];
+        const total = PALETTE.length * 2;
+        holdings.forEach((h, k) => {
+            const rivals = styles.map((st, j) => overlaps(k, j) ? j : -1).filter(j => j >= 0);
+            const usedStyles = new Set(rivals.map(j => styles[j]));
+            const usedHues = new Set(rivals.map(j => styles[j] % PALETTE.length));
+            // Vecina en la pila es la franja con datos más cercana por debajo ese mismo día.
+            const neighbourHues = new Set();
+            alive[k].forEach((x, i) => {
+                if (!x) return;
+                for (let j = k - 1; j >= 0; j--) {
+                    if (alive[j][i]) { neighbourHues.add(styles[j] % PALETTE.length); break; }
+                }
+            });
+            const all = [...Array(total).keys()];
+            styles.push(all.find(st => st < PALETTE.length && !usedHues.has(st))
+                ?? all.find(st => !usedStyles.has(st) && !neighbourHues.has(st % PALETTE.length))
+                ?? all.find(st => !usedStyles.has(st))
+                ?? k % total);
+        });
+        return styles;
+    }
+
+    /**
+     * Dos conjuntos por franja, apilados: abajo lo que costó lo que queda del valor, en su color,
+     * y encima lo que ha ganado, aclarado. Una pérdida no cabe dentro: la franja mide lo que vale,
+     * y lo perdido ya no está en la cartera. Esos días la franja va entera en su color, que todo
+     * lo que queda es dinero puesto, y lleva un filo rojo arriba.
+     */
+    function bandDatasets(breakdown) {
+        const techo = breakdown[0].values.map(() => 0);
+        const styles = bandStyles(breakdown.filter(h => h.isin !== null));
+        const sets = [];
+        breakdown.forEach((h, k) => {
+            const own = h.values, costs = h.costs;
+            const loss = own.map((v, i) => v >= 0.005 && v < costs[i] - 0.005);
+            const floor = techo.slice();
+            const invested = own.map((v, i) => techo[i] + Math.max(0, Math.min(v, costs[i])));
+            own.forEach((v, i) => { techo[i] += v; });
+            const rest = { fill: REST_COLOR, light: tint(REST_COLOR, .55) };
+            const color = h.isin === null ? Object.assign({ css: REST_COLOR, muted: rest }, rest)
+                                          : bandStyle(styles[k]);
+            const base = { band: true, pointRadius: 0, pointHoverRadius: 0, fill: '-1',
+                           // Debajo de las líneas del coste y del valor y de las ventas.
+                           order: 1 };
+            sets.push(Object.assign({}, base, {
+                label: h.name, owner: h, data: invested, backgroundColor: color.fill, borderWidth: 0,
+                normalFill: color.fill, mutedFill: color.muted.fill,
+                fill: k === 0 ? 'origin' : '-1'
+            }));
+            sets.push(Object.assign({}, base, {
+                label: h.name, holding: h, owner: h, loss: loss, floor: floor, css: color.css,
+                data: techo.slice(), backgroundColor: color.light,
+                normalFill: color.light, mutedFill: color.muted.light,
+                // Un filo blanco entre franjas, para que dos vecinas no se fundan. El rojo de las
+                // pérdidas lo pinta lossEdges.
+                borderColor: '#fff', borderWidth: 1
+            }));
+        });
+        return sets;
+    }
+
+    /**
+     * El filo rojo de las franjas en pérdidas, pintado aparte tras la última franja y antes de las
+     * líneas del coste y del valor. Con estilos por tramo en la propia línea, Chart.js la parte
+     * en trozos y el relleno de la franja de encima, que se apoya en ella, se recorta en cada uno:
+     * salían rayas blancas verticales.
+     */
+    const lossEdges = {
+        id: 'lossEdges',
+        afterDatasetDraw(chart, args) {
+            const sets = chart.data.datasets;
+            // Chart.js pinta de la última de su lista ordenada a la primera: la franja que se
+            // pinta al final es la primera franja de esa lista.
+            const lastDrawn = chart.getSortedVisibleDatasetMetas().find(m => sets[m.index].band);
+            if (!lastDrawn || args.index !== lastDrawn.index) return;
+            const ctx = chart.ctx;
+            ctx.save();
+            ctx.strokeStyle = RED;
+            ctx.lineWidth = 2;
+            sets.forEach((ds, k) => {
+                // Con un valor resaltado, solo el suyo: los demás distraerían.
+                if (!ds.loss || (highlighted && ds !== highlighted)) return;
+                const pts = chart.getDatasetMeta(k).data;
+                ctx.beginPath();
+                for (let i = 0; i + 1 < pts.length; i++) {
+                    if (!ds.loss[i] || !ds.loss[i + 1]) continue;
+                    ctx.moveTo(pts[i].x, pts[i].y);
+                    ctx.lineTo(pts[i + 1].x, pts[i + 1].y);
+                }
+                ctx.stroke();
+            });
+            ctx.restore();
+        }
+    };
+
+    /**
+     * La franja señalada en la leyenda, con su línea de coste: lo que costó lo que quedaba del
+     * valor, puesto sobre el suelo de su franja. Así se compara con su techo, que es lo que valía,
+     * y una pérdida se ve como la línea por encima de la franja, a la distancia de lo perdido. Lo
+     * que no cabía dentro.
+     */
+    let highlighted = null;
+    let LOSS_FILL = null;
+
+    function lossPattern(ctx) {
+        const tile = document.createElement('canvas');
+        tile.width = tile.height = 6;
+        const c = tile.getContext('2d');
+        c.fillStyle = 'rgba(220,53,69,.25)';
+        c.fillRect(0, 0, 6, 6);
+        c.strokeStyle = RED;
+        c.lineWidth = 1.5;
+        c.beginPath();
+        c.moveTo(-1, 7); c.lineTo(7, -1);
+        c.moveTo(-1, 1); c.lineTo(1, -1);
+        c.moveTo(5, 7); c.lineTo(7, 5);
+        c.stroke();
+        return ctx.createPattern(tile, 'repeat');
+    }
+
+    function strokeHalo(ctx, pts, ys, dash) {
+        const path = () => {
+            ctx.beginPath();
+            let drawing = false;
+            pts.forEach((p, i) => {
+                if (ys[i] === null) { drawing = false; return; }
+                if (drawing) ctx.lineTo(p.x, ys[i]); else ctx.moveTo(p.x, ys[i]);
+                drawing = true;
+            });
+        };
+        // Un halo blanco debajo, para que la línea se lea sobre cualquier color.
+        ctx.setLineDash([]);
+        ctx.strokeStyle = 'rgba(255,255,255,.85)';
+        ctx.lineWidth = 4;
+        path(); ctx.stroke();
+        ctx.setLineDash(dash);
+        ctx.strokeStyle = '#212529';
+        ctx.lineWidth = 2;
+        path(); ctx.stroke();
+    }
+
+    const highlightCost = {
+        id: 'highlightCost',
+        afterDatasetsDraw(chart) {
+            if (!highlighted) return;
+            const k = chart.data.datasets.indexOf(highlighted);
+            if (k < 0) return;
+            const y = chart.scales.y, h = highlighted.holding, ctx = chart.ctx;
+            const pts = chart.getDatasetMeta(k).data;
+            // Solo los días en que el valor estaba en cartera.
+            const alive = h.values.map((v, i) => v >= 0.005 || h.costs[i] >= 0.005);
+            const costY = pts.map((p, i) => alive[i] ? y.getPixelForValue(highlighted.floor[i] + h.costs[i]) : null);
+            ctx.save();
+            // Donde el coste pasa por encima de lo que vale, el hueco entre las dos es la pérdida:
+            // en rojo, tramo a tramo, cortando en el punto exacto en que se cruzan. Rayado y no
+            // liso, para que no se confunda con una franja que ya sea roja.
+            ctx.fillStyle = LOSS_FILL || (LOSS_FILL = lossPattern(ctx));
+            for (let i = 0; i + 1 < pts.length; i++) {
+                if (costY[i] === null || costY[i + 1] === null) continue;
+                // En píxeles, más arriba es menos: hay pérdida donde el coste queda por encima.
+                const d0 = pts[i].y - costY[i], d1 = pts[i + 1].y - costY[i + 1];
+                if (d0 <= 0 && d1 <= 0) continue;
+                const x0 = pts[i].x, x1 = pts[i + 1].x;
+                const cross = t => [x0 + (x1 - x0) * t, pts[i].y + (pts[i + 1].y - pts[i].y) * t];
+                ctx.beginPath();
+                if (d0 > 0 && d1 > 0) {
+                    ctx.moveTo(x0, pts[i].y); ctx.lineTo(x1, pts[i + 1].y);
+                    ctx.lineTo(x1, costY[i + 1]); ctx.lineTo(x0, costY[i]);
+                } else if (d0 > 0) {
+                    const [cx, cy] = cross(d0 / (d0 - d1));
+                    ctx.moveTo(x0, pts[i].y); ctx.lineTo(cx, cy); ctx.lineTo(x0, costY[i]);
+                } else {
+                    const [cx, cy] = cross(d0 / (d0 - d1));
+                    ctx.moveTo(cx, cy); ctx.lineTo(x1, pts[i + 1].y); ctx.lineTo(x1, costY[i + 1]);
+                }
+                ctx.closePath();
+                ctx.fill();
+            }
+            strokeHalo(ctx, pts, pts.map((p, i) => alive[i] ? p.y : null), []);
+            strokeHalo(ctx, pts, costY, [6, 4]);
+            ctx.restore();
+        }
+    };
+
+    /** Resalta una franja, o ninguna con null: las demás pasan a sus colores apagados. */
+    function setHighlight(ds) {
+        highlighted = ds;
+        document.querySelectorAll('#bandLegend li').forEach(li => li.classList.toggle('active', li.band === ds));
+        if (!chart) return;
+        chart.data.datasets.forEach(set => {
+            if (!set.owner) return;
+            set.backgroundColor = ds && set.owner !== ds.holding ? set.mutedFill : set.normalFill;
+        });
+        chart.update('none');
+    }
+
+    /**
+     * La leyenda de las franjas, de arriba abajo como se apilan. Solo nombres: las cifras de cada
+     * día van en el tooltip. Con el ratón encima de un nombre se pinta la línea de coste de ese
+     * valor; en el móvil, donde no hay ratón, al tocarlo, y otro toque la quita.
+     */
+    function renderBandLegend(bands) {
+        highlighted = null;
+        const list = document.getElementById('bandLegend');
+        let touch = false;
+        list.replaceChildren(...bands.filter(ds => ds.holding).reverse().map(ds => {
+            const li = document.createElement('li');
+            li.band = ds;
+            li.tabIndex = 0;
+            li.title = 'Ver lo que costó ' + ds.label;
+            const sw = document.createElement('span');
+            sw.className = 'legend-swatch';
+            sw.style.background = ds.css;
+            const name = document.createElement('span');
+            name.className = 'name';
+            name.textContent = ds.label;
+            li.append(sw, name);
+            li.addEventListener('pointerdown', e => { touch = e.pointerType !== 'mouse'; });
+            li.addEventListener('pointerenter', e => { if (e.pointerType === 'mouse') setHighlight(ds); });
+            li.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse') setHighlight(null); });
+            li.addEventListener('click', () => { if (touch) setHighlight(highlighted === ds ? null : ds); });
+            li.addEventListener('focus', () => { if (!touch) setHighlight(ds); });
+            li.addEventListener('blur', () => { if (!touch && highlighted === ds) setHighlight(null); });
+            return li;
+        }));
+    }
+
+    /**
+     * La franja que hay bajo el ratón ese día, con lo que vale, lo que costó y la diferencia. El
+     * tooltip es de todo el día; esto le añade el valor que se está señalando, para no tener que
+     * listar los dieciséis.
+     */
+    let pointerY = null;
+    const trackPointer = {
+        id: 'trackPointer',
+        beforeEvent(chart, args) { pointerY = args.event.type === 'mouseout' ? null : args.event.y; }
+    };
+
+    // Con el tooltip en la media de los puntos, moverse en vertical dentro del mismo día no lo
+    // redibuja, y la franja señalada no cambiaría. Pegado al puntero se rehace a cada paso.
+    Chart.Tooltip.positioners.pointer = (elements, eventPosition) => eventPosition;
+
+    function bandUnderPointer(chart, i) {
+        if (pointerY === null) return null;
+        const v = chart.scales.y.getValueForPixel(pointerY);
+        let floor = 0;
+        for (const ds of chart.data.datasets) {
+            if (!ds.holding) continue;
+            const top = ds.data[i];
+            if (v >= floor && v < top) return ds.holding;
+            floor = top;
+        }
+        return null;
+    }
+
     let chart = null;
 
     function render(data, years) {
@@ -178,6 +542,14 @@
 
         const sales = salesByDate(data.sales);
         const step = tickMonths(pts.length);
+        const bands = data.breakdown && data.breakdown.length > 0 ? bandDatasets(data.breakdown) : [];
+        const withBands = bands.length > 0;
+        document.getElementById('legendNormal').classList.toggle('d-none', withBands);
+        document.getElementById('legendBands').classList.toggle('d-none', !withBands);
+        document.getElementById('bandLegendCol').classList.toggle('d-none', !withBands);
+        document.getElementById('noteNormal').classList.toggle('d-none', withBands);
+        document.getElementById('noteBands').classList.toggle('d-none', !withBands);
+        if (withBands) renderBandLegend(bands);
         chart = new Chart(canvas, {
             type: 'line',
             data: {
@@ -186,20 +558,25 @@
                     {
                         label: 'Coste',
                         data: pts.map(p => p.cost),
-                        borderColor: 'rgba(13,110,253,.8)',
-                        borderWidth: 1,
+                        // Con las franjas, el azul se perdería entre los colores: va en negro y a
+                        // trazos, y sin relleno.
+                        borderColor: withBands ? '#212529' : 'rgba(13,110,253,.8)',
+                        borderWidth: withBands ? 1.5 : 1,
+                        borderDash: withBands ? [6, 4] : [],
                         backgroundColor: 'rgba(13,110,253,.25)',
-                        fill: 'start',
+                        fill: withBands ? false : 'start',
                         pointRadius: 0
                     },
                     {
                         label: 'Valor',
                         data: pts.map(p => p.value),
                         borderColor: '#212529',
-                        borderWidth: 1.5,
+                        borderWidth: withBands ? 2 : 1.5,
                         // El hueco entre las dos curvas es la plusvalía: verde si el valor va
-                        // por encima del coste, rojo si va por debajo.
-                        fill: { target: 0, above: 'rgba(25,135,84,.45)', below: 'rgba(220,53,69,.45)' },
+                        // por encima del coste, rojo si va por debajo. Con las franjas no se
+                        // vería, y se quita.
+                        fill: withBands ? false
+                            : { target: 0, above: 'rgba(25,135,84,.45)', below: 'rgba(220,53,69,.45)' },
                         pointRadius: 0,
                         pointHoverRadius: 3
                     },
@@ -215,7 +592,7 @@
                         pointBackgroundColor: pts.map(p => sales.has(p.date) && sales.get(p.date).gain < 0 ? RED : GREEN),
                         pointBorderColor: '#fff'
                     }
-                ]
+                ].concat(bands)
             },
             options: {
                 maintainAspectRatio: false,
@@ -225,6 +602,10 @@
                 plugins: {
                     legend: { display: false },
                     tooltip: {
+                        // De las franjas solo la que hay bajo el ratón, y va aparte, tras las cifras
+                        // del día.
+                        filter: item => !item.dataset.band,
+                        position: withBands ? 'pointer' : 'average',
                         callbacks: {
                             title: items => fecha.format(asDate(items[0].label)),
                             label: item => {
@@ -238,6 +619,15 @@
                                 const gain = p.value - p.cost;
                                 return [(gain >= 0 ? 'Beneficio: ' : 'Pérdida: ') + signedEur(gain)]
                                     .concat(p.complete ? [] : ['Algún valor sin cotización ese día']);
+                            },
+                            afterFooter: items => {
+                                const i = items[0].dataIndex;
+                                const h = withBands ? bandUnderPointer(items[0].chart, i) : null;
+                                if (!h) return [];
+                                const gain = h.values[i] - h.costs[i];
+                                return ['', h.name + ': ' + eur.format(h.values[i]),
+                                        'Costó ' + eur.format(h.costs[i]) + ', '
+                                        + (gain >= 0 ? 'beneficio ' : 'pérdida ') + signedEur(gain)];
                             }
                         }
                     }
@@ -263,16 +653,18 @@
                     y: { min: 0, ticks: { callback: v => eur0.format(v) } }
                 }
             },
-            plugins: [saleLabels(sales)]
+            plugins: [saleLabels(sales), trackPointer, lossEdges, highlightCost]
         });
     }
 
     const loading = document.getElementById('chartLoading');
     const loadingHtml = loading.innerHTML;
     const buttons = document.querySelectorAll('[data-years]');
+    const breakdownSwitch = document.getElementById('breakdownSwitch');
     let requested = 0;
+    let years = '1';
 
-    function load(years) {
+    function load() {
         // Si se pulsa otro periodo antes de que llegue el anterior, gana el último pulsado.
         const ticket = ++requested;
         buttons.forEach(b => b.classList.toggle('active', b.dataset.years === years));
@@ -280,7 +672,7 @@
         document.getElementById('chart').classList.add('d-none');
         loading.innerHTML = loadingHtml;
         loading.classList.remove('d-none');
-        fetch('/api/portfolio-history?years=' + years)
+        fetch('/api/portfolio-history?years=' + years + (breakdownSwitch.checked ? '&breakdown=true' : ''))
             .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
             .then(data => { if (ticket === requested) render(data, years); })
             .catch(e => {
@@ -288,8 +680,14 @@
             });
     }
 
-    buttons.forEach(b => b.addEventListener('click', () => load(b.dataset.years)));
-    load('1');
+    // El interruptor se recuerda en este navegador; si no se puede leer, empieza apagado.
+    try { breakdownSwitch.checked = localStorage.getItem('chart.breakdown') === '1'; } catch (e) { }
+    breakdownSwitch.addEventListener('change', () => {
+        try { localStorage.setItem('chart.breakdown', breakdownSwitch.checked ? '1' : '0'); } catch (e) { }
+        load();
+    });
+    buttons.forEach(b => b.addEventListener('click', () => { years = b.dataset.years; load(); }));
+    load();
 </script>
 </body>
 </html>
