@@ -358,6 +358,8 @@
      * que no cabía dentro.
      */
     let highlighted = null;
+    /** Si el resaltado lo puso el ratón sobre una franja, y no la leyenda. */
+    let highlightedFromChart = false;
     let LOSS_FILL = null;
 
     function lossPattern(ctx) {
@@ -441,8 +443,9 @@
     };
 
     /** Resalta una franja, o ninguna con null: las demás pasan a sus colores apagados. */
-    function setHighlight(ds) {
+    function setHighlight(ds, fromChart = false) {
         highlighted = ds;
+        highlightedFromChart = fromChart && ds !== null;
         document.querySelectorAll('#bandLegend li').forEach(li => li.classList.toggle('active', li.band === ds));
         if (!chart) return;
         chart.data.datasets.forEach(set => {
@@ -491,7 +494,14 @@
     let pointerY = null;
     const trackPointer = {
         id: 'trackPointer',
-        beforeEvent(chart, args) { pointerY = args.event.type === 'mouseout' ? null : args.event.y; }
+        beforeEvent(chart, args) { pointerY = args.event.type === 'mouseout' ? null : args.event.y; },
+        // Chart.js solo llama a onHover dentro de la zona de datos: al salir de ella, o de la
+        // gráfica, el resaltado que puso el ratón sobre una franja se quita aquí.
+        afterEvent(chart, args) {
+            if ((args.event.type === 'mouseout' || !args.inChartArea) && highlightedFromChart) {
+                setHighlight(null);
+            }
+        }
     };
 
     // Con el tooltip en la media de los puntos, moverse en vertical dentro del mismo día no lo
@@ -599,18 +609,15 @@
                 animation: false,
                 layout: { padding: { top: 18 } },
                 interaction: { mode: 'index', intersect: false },
-                // Pulsar una franja la resalta igual que su nombre en la leyenda; pulsarla otra vez,
-                // o fuera de las franjas, lo quita. En el móvil es tocarla.
-                onClick: (e, items, ch) => {
-                    if (!withBands || items.length === 0) return;
-                    const h = bandUnderPointer(ch, items[0].index);
-                    const ds = h ? ch.data.datasets.find(d => d.holding === h) : null;
-                    setHighlight(ds && ds !== highlighted ? ds : null);
-                },
+                // Pasar por una franja la resalta igual que pasar por su nombre en la leyenda, y
+                // salir de ella lo quita. En el móvil, tocarla; Chart.js trata el toque como un paso
+                // del ratón.
                 onHover: (e, items, ch) => {
                     if (!withBands) return;
-                    const over = items.length > 0 && bandUnderPointer(ch, items[0].index);
-                    ch.canvas.style.cursor = over ? 'pointer' : '';
+                    const h = e.type !== 'mouseout' && items.length > 0
+                        ? bandUnderPointer(ch, items[0].index) : null;
+                    const ds = h ? ch.data.datasets.find(d => d.holding === h) : null;
+                    if (ds !== highlighted) setHighlight(ds, true);
                 },
                 plugins: {
                     legend: { display: false },
